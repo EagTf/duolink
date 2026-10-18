@@ -16,6 +16,7 @@ Not released yet. Entries are by milestone; see
   every 10 s; other failures wait for Start, so routes are never added and
   removed in a loop.
 - Single instance; started without admin rights it asks for elevation (UAC).
+  Double-clicking `duolinkw.exe` starts the tray.
 - `duolink autostart on|off|status`: a logon task in Task Scheduler with
   highest privileges, no battery limits and no time limit.
 - Tray output goes to `duolink.log` next to the exe (restarts beyond 1 MiB).

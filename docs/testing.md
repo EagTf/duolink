@@ -152,8 +152,9 @@ Build with `go build`, then in an **admin** terminal:
 7. **Quit.** Quit: icon disappears; log ends with route removal and `quit`;
    `route print -4` clean.
 8. **Not elevated.** From a normal (non-admin) terminal, `duolink tray`
-   refuses with a message. Double-clicking `duolinkw.exe` in Explorer shows
-   the UAC prompt; after Yes the tray starts; after No a dialog explains.
+   refuses with a message. Double-clicking `duolinkw.exe` in Explorer (or
+   `duolinkw.exe tray` from a normal terminal) shows the UAC prompt; after
+   Yes the tray starts; after No a dialog explains.
 9. **Retry.** Disconnect Wi-Fi, start the tray: status `Not running: need at
    least 2 usable uplinks ... (retrying)`, grey icon. Reconnect Wi-Fi: within
    about 10 s it starts by itself. The log shows the error once, not every

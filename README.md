@@ -136,7 +136,8 @@ each line's state and speed, and for:
 How it avoids a console window: Windows decides from a flag in the exe
 whether a program gets a console. `duolink tray` keeps a copy of itself,
 `duolinkw.exe`, with that flag set to "windowed", and runs the tray from
-it. After rebuilding duolink, run `duolink tray` once to refresh the copy.
+it. Double-clicking `duolinkw.exe` also starts the tray (Windows asks for
+admin rights). After rebuilding duolink, run `duolink tray` once to refresh the copy.
 
 Only one duolink can run at a time: `duolink run` refuses while the tray is
 active, and the other way round. `duolink cleanup` also refuses while duolink runs:

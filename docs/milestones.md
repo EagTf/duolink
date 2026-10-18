@@ -96,10 +96,8 @@ Tested:
 - Not reported yet: Steam `sticky-exempt` count during a download, pin
   fallback, exclude, config error messages, no-rules run.
 
-## Awaiting test
-
 ### 9. System tray app
-Status: awaiting test.
+Status: done (logon start of autostart not yet tested).
 Delivered:
 - `internal/engine`: start/stop-able engine shared by `duolink run` and the
   tray; PC-wide mutex (one engine at a time); undo in reverse on Stop or a
@@ -116,7 +114,38 @@ Delivered:
 - Console tools started with `CREATE_NO_WINDOW` (no flashing windows).
 - Unit tests: PE patch (incl. replacing a running copy), task XML, icon
   (Windows loads it), engine lifecycle (failed Start, undo order).
-Tested: (pending)
+Tested (steps in docs/testing.md, "Tray app"):
+- Start from an admin terminal: prompt returns at once, no console window,
+  icon grey then green, tooltip with both lines UP.
+- Menu: status, per-line rows and total with live speeds during a Steam
+  download; Open log shows the full startup, self-check all ok; no console
+  windows flashed (netsh runs without a window).
+- Pause / Start: routes removed on Pause (`route print` shows only the two
+  normal defaults), restored on Start. Editing duolink.json while paused
+  (weights 2:1) took effect on Start.
+- Line down: unplugging Ethernet gave an amber icon and a DOWN row; the log
+  shows the failed-dial trigger and the adapter watcher both firing within
+  the same second, then `back UP` after replugging. Disconnecting and
+  removing the USB Wi-Fi adapter was handled the same way, including
+  "adapter removed" and its return.
+- Single instance: a second `duolink tray` shows the dialog; `duolink run`
+  and `duolink cleanup` refuse while the tray runs.
+- Quit: routes removed first, icon gone, normal routing.
+- Retry: started with Wi-Fi disconnected: grey "(retrying)", the error
+  logged once; came up by itself after Wi-Fi reconnected.
+- Not elevated: refused from a normal terminal; `duolinkw.exe tray` showed
+  UAC: No gave the dialog, Yes started the tray.
+- Start with Windows: the menu tick created the task (`autostart status`:
+  on) and unticking deleted it. Not yet tested: the actual start at logon.
+- Rebuild while running: the running copy was moved to `.old`, the new copy
+  written, and the new build ran after Quit and start.
+- Found during the test (fixed): double-clicking duolinkw.exe did nothing
+  (now starts the tray); the log didn't say why a second tray exited or
+  when a quiet retry finally succeeded (both logged now).
+- Seen during the test (open): Wi-Fi marked DOWN twice under a saturated
+  download (probe timeouts); see docs/action_items.md.
+- No retry loop after a late failure: covered by unit tests (can't be
+  triggered safely by hand).
 
 ## Planned
 
@@ -124,6 +153,6 @@ Tested: (pending)
 |---|---|---|
 | 7 | Instant failover: mark a line DOWN as soon as its adapter disconnects, or probe at once after 2 failed dials to different destinations | done (partially tested) |
 | 8 | Per-process rules via `GetExtendedTcpTable` / `GetExtendedUdpTable` (flow's local port → PID → exe): `sticky_exempt` (default `["steam.exe"]`), `pin` (process → line, with fallback when that line is down), `exclude` (not balanced). Configured in duolink.json | done (partially tested) |
-| 9 | System tray app: `duolink tray`, no console, Start/Pause, speeds, Quit with cleanup, single instance, autostart via Task Scheduler with highest privileges | awaiting test |
+| 9 | System tray app: `duolink tray`, no console, Start/Pause, speeds, Quit with cleanup, single instance, autostart via Task Scheduler with highest privileges | done (logon start pending) |
 | 10 | Small window opened from the tray; X hides it to the tray, only Quit exits | next |
 | later | Metered/phone lines with a data cap; hot-plugging uplinks; automatic weights from passive throughput measurement; IPv6 | ideas |

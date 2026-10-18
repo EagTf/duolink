@@ -5,6 +5,8 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/eagtf/duolink/internal/guiexe"
 )
 
 const usage = `usage:
@@ -29,6 +31,15 @@ const usage = `usage:
 `
 
 func main() {
+	if len(os.Args) < 2 {
+		// The windowed copy (duolinkw.exe) only exists for the tray, and has
+		// nowhere to print usage; double-clicking it starts the tray.
+		if exe, err := os.Executable(); err == nil {
+			if gui, _ := guiexe.IsGUI(exe); gui {
+				os.Args = append(os.Args, "tray")
+			}
+		}
+	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)

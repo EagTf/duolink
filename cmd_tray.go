@@ -92,6 +92,7 @@ func runTray(exe, cfgPath string, args []string) {
 		if err != nil {
 			fmt.Println("error:", err)
 		}
+		fmt.Println("another duolink tray is already running; exiting")
 		tray.Fatal("duolink is already running in the tray.")
 		return
 	}

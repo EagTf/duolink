@@ -141,6 +141,9 @@ func (a *app) start() {
 	}
 	a.eng = eng
 	a.mu.Unlock()
+	if quiet { // the "starting" header was skipped; say when it finally came up
+		fmt.Printf("=== %s started after retrying\n", time.Now().Format("2006-01-02 15:04:05"))
+	}
 	fmt.Println("running")
 	a.mStatus.SetTitle("Running")
 	systray.SetIcon(a.icons["running"])
