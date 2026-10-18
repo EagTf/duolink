@@ -83,6 +83,24 @@ the point is IP consistency. Under review: with a sliding timer this keeps a
 long download on one line after the failed line recovers (see
 docs/action_items.md).
 
+**Per-app rules by exe file name, looked up per flow.** Mapping the app's
+socket (198.18.0.1:port) through the owner tables is exact and needs no
+driver or hooks. Exe names (not paths) keep the config portable and short.
+One list per exe avoids having to define precedence between rules.
+
+**`exclude` means "the line Windows would use", not "bypass duolink".**
+Routes are per destination, not per process, so a process can't skip the
+TUN. The nearest useful meaning is "never spread": always the lowest-metric
+weighted line, with failover.
+
+**`steam.exe` is sticky-exempt by default.** Steam downloads over many
+connections to a few CDN IPs; stickiness would put them all on one line if
+Steam ever used a single server. Being explicit costs nothing for other apps.
+
+**Pinned or excluded flows fall back to WRR, not to the sticky table, when
+their line is DOWN.** They have no sticky history to honour, and writing one
+would keep them away from their line after it recovers.
+
 **Config: defaults < duolink.json < flags, unknown fields rejected.** A file
 only needs what differs, typos fail loudly instead of being ignored, and
 flags allow one-off overrides without editing the file.

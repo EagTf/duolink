@@ -3,6 +3,22 @@
 Not released yet. Entries are by milestone; see
 [docs/milestones.md](docs/milestones.md) for test results.
 
+## Milestone 8: per-app rules
+
+- Each new flow is mapped to the program that opened it: the app's socket
+  address (198.18.0.1:port) is looked up with `GetExtendedTcpTable` /
+  `GetExtendedUdpTable`, and the PID's exe name read with
+  `QueryFullProcessImageName`.
+- New `processes` section in duolink.json:
+  - `sticky_exempt` (default `["steam.exe"]`): balanced per flow, ignoring stickiness.
+  - `pin`: exe → line; balanced over the other lines while that line is DOWN.
+  - `exclude`: never balanced; always the line with the lowest interface
+    metric (what Windows would pick), or another one while it's DOWN.
+  - Each exe may appear in only one list; names must be exe file names.
+- `duolink run` prints the active rules; live stats show flows per rule and
+  how many flows had no identifiable owner.
+- No lookups at all when no rules are configured.
+
 ## Milestone 7: instant failover
 
 - Adapter watcher (`NotifyIpInterfaceChange` + `NotifyUnicastIpAddressChange`):

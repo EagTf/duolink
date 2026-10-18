@@ -76,17 +76,35 @@ func newBalancer(ups []*Adapter, weights map[*Adapter]int, cfg *Config) *balance
 	return b
 }
 
-// Pick chooses the uplink for a new flow to dst.
+// Pick chooses the uplink for a new flow to dst that no process rule covers.
+func (b *balancer) Pick(dst netip.Addr) *Adapter { return b.PickFor(dst, flowRule{}) }
+
+// PickFor chooses the uplink for a new flow to dst under rule r.
 //
-// With stickiness on, a destination that got a flow in the last stickyTTL
-// goes to the same uplink again (if that uplink is still usable), so the
-// remote side sees one public IP. Everything else is balanced.
-func (b *balancer) Pick(dst netip.Addr) *Adapter {
+//   - pin / exclude: the rule's line, as long as it's a candidate (weighted and
+//     UP). Otherwise the flow is balanced like a sticky-exempt one.
+//   - sticky-exempt: weighted round-robin; the sticky table is neither read
+//     nor written, so one app's many connections to the same few servers
+//     spread over all lines.
+//   - no rule: with stickiness on, a destination that got a flow in the last
+//     stickyTTL goes to the same uplink again (if that uplink is still
+//     usable), so the remote side sees one public IP. Everything else is
+//     balanced.
+func (b *balancer) PickFor(dst netip.Addr, r flowRule) *Adapter {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	cands := b.candidates()
 	if len(cands) == 0 {
 		return nil
+	}
+	switch r.kind {
+	case rulePin, ruleExclude:
+		if contains(cands, r.line) {
+			return r.line
+		}
+		return wrr(cands)
+	case ruleStickyExempt:
+		return wrr(cands)
 	}
 	now := b.now()
 	if b.stickyTTL > 0 {

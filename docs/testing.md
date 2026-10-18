@@ -95,6 +95,38 @@ the stats.
    the duolink log is what counts.)
 7. **Cleanup unchanged:** let `--for` expire: routes removed as before.
 
+## Per-app rules
+
+Get each line's public IP first (`duolink list --ip`, without duolink
+running). During the tests, open https://api.ipify.org in the browser to see
+which line the browser's connections use (reload with Ctrl+F5). Replace
+`chrome.exe` with your browser's exe (`msedge.exe`, `firefox.exe`).
+
+1. **Default (Steam exempt).** No `processes` in duolink.json.
+   `duolink run --for 10m`: startup prints `process rules: steam.exe
+   sticky-exempt`. Start a Steam download: the stats show
+   `rules (flows): steam.exe sticky-exempt N` growing, both lines carry
+   traffic, total about 45 Mbit/s. `owner unknown` stays at 0 or small.
+2. **Pin.** Add `"processes": {"pin": {"chrome.exe": "wifi"}}`. Run, reload
+   api.ipify.org several times: always the Wi-Fi public IP. The stats show
+   `chrome.exe pinned N`. (Browsers also use UDP (QUIC/HTTP3), so this covers
+   the UDP lookup too.)
+3. **Pin fallback.** While running with the pin, disconnect Wi-Fi: reloads
+   now show the Ethernet IP. Reconnect; after `Wi-Fi is back UP`, new
+   connections show the Wi-Fi IP again. Close and reopen the tab if the
+   browser keeps the old connection alive.
+4. **Exclude.** Replace the pin with `"exclude": ["chrome.exe"]`. The startup
+   line shows `chrome.exe excluded → Ethernet` (the lowest-metric line from
+   `duolink list`). api.ipify.org always shows the Ethernet IP. Unplug
+   Ethernet: it switches to Wi-Fi.
+5. **Config errors.** `duolink config` with `"pin": {"steam.exe": "eth"}`
+   (and no `sticky_exempt`): error explaining steam.exe is in sticky_exempt
+   by default. With `"pin": {"chrome.exe": "phone"}`: `duolink run` fails
+   with "no usable uplink matches".
+6. **No rules.** `"processes": {"sticky_exempt": []}`: startup prints
+   `process rules: none`, no rules line in the stats, everything balanced as
+   in milestone 6.
+
 ## Stickiness
 
 1. Default run: `sticky dsts` grows on both lines while browsing.
