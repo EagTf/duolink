@@ -1,4 +1,4 @@
-package main
+package netif
 
 import (
 	"context"
@@ -91,10 +91,10 @@ func (a *Adapter) DialTCP4(ctx context.Context, addr string) (net.Conn, error) {
 	return c, nil
 }
 
-// publicIP asks api.ipify.org which address our traffic arrives from, going
+// PublicIP asks api.ipify.org which address our traffic arrives from, going
 // through this adapter only. Used by `duolink list --ip`; it's an explicit
 // diagnostic, never called in normal operation.
-func (a *Adapter) publicIP(ctx context.Context) (string, error) {
+func (a *Adapter) PublicIP(ctx context.Context) (string, error) {
 	tr := &http.Transport{
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 			return a.DialTCP4(ctx, addr)

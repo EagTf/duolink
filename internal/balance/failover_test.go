@@ -1,4 +1,4 @@
-package main
+package balance
 
 import (
 	"context"
@@ -11,11 +11,13 @@ import (
 	"testing"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/eagtf/duolink/internal/netif"
 )
 
-// failoverRig is a balancer with a scripted probe and a captured log.
+// failoverRig is a Balancer with a scripted probe and a captured log.
 type failoverRig struct {
-	b         *balancer
+	b         *Balancer
 	eth, wifi *uplink
 	probeErr  error // what the next probes return
 	probes    int
@@ -24,9 +26,9 @@ type failoverRig struct {
 
 func newRig(t *testing.T) *failoverRig {
 	eth, wifi, ups := testUplinks()
-	r := &failoverRig{b: newBalancer(ups, map[*Adapter]int{eth: 1, wifi: 1}, noSticky())}
+	r := &failoverRig{b: New(ups, map[*netif.Adapter]int{eth: 1, wifi: 1}, noSticky())}
 	r.eth, r.wifi = r.b.link(eth), r.b.link(wifi)
-	r.b.probe = func(context.Context, *Adapter) error { r.probes++; return r.probeErr }
+	r.b.probe = func(context.Context, *netif.Adapter) error { r.probes++; return r.probeErr }
 	r.b.logf = func(format string, args ...any) { r.log = append(r.log, fmt.Sprintf(format, args...)) }
 	return r
 }
@@ -80,8 +82,8 @@ func TestDialOutcome(t *testing.T) {
 func TestFailedDialsToOneDestinationNeverProbe(t *testing.T) {
 	r := newRig(t)
 	for i := 0; i < 5; i++ {
-		r.b.noteDial(r.eth.a, dstA, errTimeout)
-		r.b.noteDial(r.eth.a, dstA80, errTimeout) // same IP, other port: still one destination
+		r.b.NoteDial(r.eth.a, dstA, errTimeout)
+		r.b.NoteDial(r.eth.a, dstA80, errTimeout) // same IP, other port: still one destination
 	}
 	if why := kicked(r.eth); why != "" {
 		t.Errorf("retries to one dead server triggered a probe: %q", why)
@@ -90,11 +92,11 @@ func TestFailedDialsToOneDestinationNeverProbe(t *testing.T) {
 
 func TestFailedDialsToTwoDestinationsProbe(t *testing.T) {
 	r := newRig(t)
-	r.b.noteDial(r.eth.a, dstA, errTimeout)
+	r.b.NoteDial(r.eth.a, dstA, errTimeout)
 	if kicked(r.eth) != "" {
 		t.Fatal("one failure already triggered a probe")
 	}
-	r.b.noteDial(r.eth.a, dstB, errTimeout)
+	r.b.NoteDial(r.eth.a, dstB, errTimeout)
 	why := kicked(r.eth)
 	if !strings.Contains(why, "2 failed dials") || !strings.Contains(why, dstA.String()) || !strings.Contains(why, dstB.String()) {
 		t.Fatalf("probe reason = %q", why)
@@ -110,21 +112,21 @@ func TestFailedDialsToTwoDestinationsProbe(t *testing.T) {
 
 func TestDialSuccessOrRefusalResetsTheCount(t *testing.T) {
 	r := newRig(t)
-	r.b.noteDial(r.eth.a, dstA, errTimeout)
-	r.b.noteDial(r.eth.a, dstB, nil) // a working dial proves the line
-	r.b.noteDial(r.eth.a, dstC, errTimeout)
+	r.b.NoteDial(r.eth.a, dstA, errTimeout)
+	r.b.NoteDial(r.eth.a, dstB, nil) // a working dial proves the line
+	r.b.NoteDial(r.eth.a, dstC, errTimeout)
 	if why := kicked(r.eth); why != "" {
 		t.Errorf("success in between should reset the count, got probe %q", why)
 	}
 
-	r.b.noteDial(r.eth.a, dstB, errRefused) // refused = remote answered = line works
-	r.b.noteDial(r.eth.a, dstA, errTimeout)
+	r.b.NoteDial(r.eth.a, dstB, errRefused) // refused = remote answered = line works
+	r.b.NoteDial(r.eth.a, dstA, errTimeout)
 	if why := kicked(r.eth); why != "" {
 		t.Errorf("a refused connection should count as proof of life, got probe %q", why)
 	}
 
-	r.b.noteDial(r.eth.a, dstB, context.Canceled) // ignored: neither resets nor counts
-	r.b.noteDial(r.eth.a, dstC, errTimeout)
+	r.b.NoteDial(r.eth.a, dstB, context.Canceled) // ignored: neither resets nor counts
+	r.b.NoteDial(r.eth.a, dstC, errTimeout)
 	if why := kicked(r.eth); why == "" {
 		t.Error("cancelled dial should be ignored, not reset the count")
 	}
@@ -132,8 +134,8 @@ func TestDialSuccessOrRefusalResetsTheCount(t *testing.T) {
 
 func TestDialsFailButProbeSucceedsStaysUp(t *testing.T) {
 	r := newRig(t)
-	r.b.noteDial(r.eth.a, dstA, errTimeout)
-	r.b.noteDial(r.eth.a, dstB, errTimeout)
+	r.b.NoteDial(r.eth.a, dstA, errTimeout)
+	r.b.NoteDial(r.eth.a, dstB, errTimeout)
 	r.b.check(context.Background(), r.eth, kicked(r.eth))
 	if r.probes != 1 {
 		t.Fatalf("probes = %d, want 1", r.probes)
@@ -149,8 +151,8 @@ func TestDialsFailButProbeSucceedsStaysUp(t *testing.T) {
 func TestDialsFailAndProbeFailsGoesDown(t *testing.T) {
 	r := newRig(t)
 	r.probeErr = errors.New("1.1.1.1:443: i/o timeout")
-	r.b.noteDial(r.eth.a, dstA, errTimeout)
-	r.b.noteDial(r.eth.a, dstB, errTimeout)
+	r.b.NoteDial(r.eth.a, dstA, errTimeout)
+	r.b.NoteDial(r.eth.a, dstB, errTimeout)
 	r.b.check(context.Background(), r.eth, kicked(r.eth))
 	if r.eth.healthy.Load() {
 		t.Fatal("line stayed UP although the probe failed")
@@ -217,42 +219,4 @@ func TestAdapterIssueWhileAlreadyDownIsLogged(t *testing.T) {
 	if l := r.lastLog(); !strings.Contains(l, "address changed") {
 		t.Errorf("log = %q", l)
 	}
-}
-
-func TestAdapterIssue(t *testing.T) {
-	orig := &Adapter{Index: 12, IPv4: netip.MustParsePrefix("192.168.2.10/24"), Gateway: netip.MustParseAddr("192.168.2.1"), Up: true}
-	mod := func(f func(a *Adapter)) *Adapter {
-		c := *orig
-		f(&c)
-		return &c
-	}
-	cases := []struct {
-		cur  *Adapter
-		want string // substring; "" = no issue
-	}{
-		{mod(func(*Adapter) {}), ""},
-		{nil, "removed"},
-		{mod(func(a *Adapter) { a.Up = false }), "disconnected"},
-		{mod(func(a *Adapter) { a.IPv4 = netip.Prefix{} }), "lost its IPv4 address"},
-		{mod(func(a *Adapter) { a.IPv4 = netip.MustParsePrefix("169.254.7.7/16") }), "lost its IPv4 address"},
-		{mod(func(a *Adapter) { a.IPv4 = netip.MustParsePrefix("192.168.2.30/24") }), "address changed"},
-		{mod(func(a *Adapter) { a.Index = 40 }), "index changed"},
-		{mod(func(a *Adapter) { a.Gateway = netip.Addr{} }), "lost its default gateway"},
-	}
-	for _, c := range cases {
-		got := adapterIssue(orig, c.cur)
-		if (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
-			t.Errorf("adapterIssue(%+v) = %q, want %q", c.cur, got, c.want)
-		}
-	}
-}
-
-// The subscriptions only listen (no admin, nothing changes), so this checks
-// the real Win32 calls and the callback signature without touching the system.
-func TestWatchAdaptersSubscribes(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	if err := watchAdapters(ctx, func() {}); err != nil {
-		t.Fatal(err)
-	}
-	cancel()
 }

@@ -1,4 +1,5 @@
-package main
+// Package procs finds which program owns a socket.
+package procs
 
 import (
 	"encoding/binary"
@@ -39,14 +40,14 @@ const (
 	nameMaxAge = 10 * time.Second // PIDs get reused, so names are cached only briefly
 )
 
-// procTable answers "which process owns the app side of this flow?".
+// Table answers "which process owns the app side of this flow?".
 //
 // Every flow from an app reaches the netstack from a socket the app opened, and
 // that socket's local address is the TUN's 198.18.0.1 plus a port. Looking
 // that address:port up in the owner table gives the PID, and the PID gives the
 // exe name. The TCP handshake with the app is already complete when the flow
 // reaches us, so the app's socket is always in the table.
-type procTable struct {
+type Table struct {
 	reads atomic.Uint64 // counts table reads; orders snapshots against lookups
 
 	mu    sync.Mutex
@@ -64,14 +65,14 @@ type procName struct {
 	at  time.Time
 }
 
-func newProcTable() *procTable {
-	return &procTable{names: map[uint32]procName{}}
+func NewTable() *Table {
+	return &Table{names: map[uint32]procName{}}
 }
 
-// lookup returns the lower-case exe name ("steam.exe") owning the socket with
+// Lookup returns the lower-case exe name ("steam.exe") owning the socket with
 // local address src, or "" if it can't be found (the socket already closed,
 // or a protected process).
-func (p *procTable) lookup(udp bool, src netip.AddrPort) string {
+func (p *Table) Lookup(udp bool, src netip.AddrPort) string {
 	// The app's socket already exists now, so any snapshot taken after this
 	// moment contains it. A miss in an older snapshot means "re-read"; a miss
 	// in a newer one means the socket is gone. In a burst of new flows, the
@@ -105,7 +106,7 @@ func (p *procTable) lookup(udp bool, src netip.AddrPort) string {
 
 // find looks src up in snapshot i. An unconnected UDP socket is often bound
 // to 0.0.0.0:port rather than the TUN address, so UDP also tries that.
-func (p *procTable) find(i int, udp bool, src netip.AddrPort) (uint32, bool) {
+func (p *Table) find(i int, udp bool, src netip.AddrPort) (uint32, bool) {
 	owners := p.snaps[i].owners
 	if pid, ok := owners[src]; ok {
 		return pid, true

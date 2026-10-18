@@ -1,14 +1,15 @@
-package main
+// Package config loads and validates duolink.json.
+package config
 
 import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -57,7 +58,8 @@ type HealthConfig struct {
 	Targets             []string `json:"targets"`               // ip:port, TCP connect only
 }
 
-func defaultConfig() Config {
+// Default returns the built-in settings that duolink.json is applied on top of.
+func Default() Config {
 	return Config{
 		Weights: map[string]int{},
 		Sticky:  StickyConfig{Enabled: true, Minutes: 10},
@@ -76,14 +78,21 @@ func defaultConfig() Config {
 	}
 }
 
-func (c *Config) stickyTTL() time.Duration {
+// StickyTTL is how long a destination stays on its line; 0 = stickiness off.
+func (c *Config) StickyTTL() time.Duration {
 	if !c.Sticky.Enabled {
 		return 0
 	}
 	return time.Duration(c.Sticky.Minutes) * time.Minute
 }
 
-func (c *Config) validate() error {
+// UDPIdle is the UDP idle timeout as a duration.
+func (c *Config) UDPIdle() time.Duration {
+	return time.Duration(c.UDPIdleSeconds) * time.Second
+}
+
+// Validate reports every invalid setting at once.
+func (c *Config) Validate() error {
 	var errs []error
 	check := func(ok bool, format string, args ...any) {
 		if !ok {
@@ -135,8 +144,8 @@ func (c *Config) validate() error {
 	return errors.Join(errs...)
 }
 
-// defaultConfigPath is duolink.json next to duolink.exe, like wintun.dll.
-func defaultConfigPath() string {
+// DefaultPath is duolink.json next to duolink.exe, like wintun.dll.
+func DefaultPath() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return "duolink.json"
@@ -144,10 +153,10 @@ func defaultConfigPath() string {
 	return filepath.Join(filepath.Dir(exe), "duolink.json")
 }
 
-// loadConfig reads path on top of the defaults. A missing file is fine
-// (defaults only); a broken one is an error, never silently ignored.
-func loadConfig(path string) (Config, bool, error) {
-	c := defaultConfig()
+// Load reads path on top of the defaults. A missing file is fine (defaults
+// only, found = false); a broken one is an error, never silently ignored.
+func Load(path string) (c Config, found bool, err error) {
+	c = Default()
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return c, false, nil
@@ -160,84 +169,26 @@ func loadConfig(path string) (Config, bool, error) {
 	if err := dec.Decode(&c); err != nil {
 		return c, true, fmt.Errorf("%s: %w", path, err)
 	}
-	if err := c.validate(); err != nil {
+	if err := c.Validate(); err != nil {
 		return c, true, fmt.Errorf("%s:\n%w", path, err)
 	}
 	return c, true, nil
 }
 
-// configFlags are the command-line overrides shared by `run` and `config`.
-// Only flags actually given override the file.
-type configFlags struct {
-	fs      *flag.FlagSet
-	path    *string
-	weights *string
-	sticky  *int
-}
-
-func addConfigFlags(fs *flag.FlagSet) *configFlags {
-	return &configFlags{
-		fs:      fs,
-		path:    fs.String("config", defaultConfigPath(), "config file"),
-		weights: fs.String("weights", "", "flow share per uplink, e.g. eth=1,wifi=1 (unnamed uplinks get 0)"),
-		sticky:  fs.Int("sticky-minutes", 0, "per-destination stickiness in minutes; 0 turns it off"),
-	}
-}
-
-// load reads the config file and applies the flags that were set.
-func (f *configFlags) load() (Config, bool, error) {
-	c, found, err := loadConfig(*f.path)
-	if err != nil {
-		return c, found, err
-	}
-	var ferr error
-	f.fs.Visit(func(fl *flag.Flag) {
-		switch fl.Name {
-		case "weights":
-			c.Weights, ferr = parseWeightSpec(*f.weights)
-		case "sticky-minutes":
-			c.Sticky.Enabled = *f.sticky > 0
-			if c.Sticky.Enabled {
-				c.Sticky.Minutes = *f.sticky
-			}
+// ParseWeightSpec turns the --weights text "eth=2,wifi=1" into a name → weight
+// map, the same shape as "weights" in duolink.json.
+func ParseWeightSpec(spec string) (map[string]int, error) {
+	w := map[string]int{}
+	for _, part := range strings.Split(spec, ",") {
+		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok || k == "" {
+			return nil, fmt.Errorf("bad weight %q: want name=number, e.g. eth=1", part)
 		}
-	})
-	if ferr != nil {
-		return c, found, ferr
-	}
-	return c, found, c.validate()
-}
-
-// cmdConfig prints the effective config: defaults, then duolink.json, then flags.
-// --init writes the defaults to duolink.json as a starting point.
-func cmdConfig(args []string) error {
-	fs := flag.NewFlagSet("config", flag.ExitOnError)
-	cf := addConfigFlags(fs)
-	initFile := fs.Bool("init", false, "write the default config to the config file (won't overwrite)")
-	fs.Parse(args)
-
-	if *initFile {
-		if _, err := os.Stat(*cf.path); err == nil {
-			return fmt.Errorf("%s already exists; not overwriting", *cf.path)
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("bad weight %q: %q is not a number", part, v)
 		}
-		out, _ := json.MarshalIndent(defaultConfig(), "", "  ")
-		if err := os.WriteFile(*cf.path, append(out, '\n'), 0o644); err != nil {
-			return err
-		}
-		fmt.Println("wrote", *cf.path)
-		return nil
+		w[k] = n
 	}
-
-	c, found, err := cf.load()
-	if err != nil {
-		return err
-	}
-	if found {
-		fmt.Fprintln(os.Stderr, "# from", *cf.path, "+ defaults + flags")
-	} else {
-		fmt.Fprintln(os.Stderr, "# no", *cf.path, "- defaults + flags")
-	}
-	out, _ := json.MarshalIndent(c, "", "  ")
-	fmt.Println(string(out))
-	return nil
+	return w, nil
 }

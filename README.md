@@ -42,7 +42,7 @@ any per-app setup.
 ```
 git clone https://github.com/eagtf/duolink.git
 cd duolink
-go build -o duolink.exe .
+go build
 ```
 
 Then download the Wintun zip from <https://www.wintun.net/>, and copy

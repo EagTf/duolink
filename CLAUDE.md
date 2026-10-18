@@ -13,15 +13,35 @@ Design: [docs/architecture.md](docs/architecture.md). Status and plan:
 ## Commands
 
 ```
-go build -o duolink.exe .     # binary must be named duolink.exe; wintun.dll sits next to it
+go build                   # makes duolink.exe in the root; wintun.dll sits next to it
 go vet ./...
 go test ./...
-gofmt -l .                  # must print nothing
+gofmt -l .                 # must print nothing
 ```
 
 Safe for Claude to run (read-only): `duolink list`, `duolink config`,
 `duolink debug route <ip>`, and the unprivileged error paths of the other
 commands. `duolink list --ip` makes outbound requests; only run it when asked.
+
+## Layout
+
+One binary. The `main` package (the CLI, and later the tray app and window)
+is at the root; everything else is in `internal/` (one package per job; see
+the package table in docs/architecture.md). Where new code goes:
+
+- A new command or flag: a `cmd_<name>.go` file at the root. Commands stay
+  thin: they parse flags, call internal packages and print.
+- UI code (tray, window): an `internal/` package, started by a command at
+  the root (e.g. `duolink tray`). It is part of the same build.
+- A new setting: `internal/config` (type, default, validation), then the
+  package that uses it.
+- Windows API calls belong to the package that owns that job (adapters in
+  `netif`, routes in `route`, sockets → processes in `procs`).
+- Tests go next to the code in the same package (`foo_test.go` beside
+  `foo.go`), never in a separate tests folder: most tests need unexported
+  internals.
+- Dependencies only point down (`main` → `forward` → `balance` → `netif`,
+  `config`). No import cycles; `config` and `netif` import nothing internal.
 
 ## Rules
 
