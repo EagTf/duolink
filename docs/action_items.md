@@ -34,6 +34,14 @@
 - The failed-dial trigger reacts only as fast as dials fail: a silently
   dropped connect takes up to the 10 s dial timeout, so "internet dead behind
   a working LAN" is detected in about 10–20 s, not instantly.
+- Per-app rules see only the exe name. Two programs with the same file name
+  in different folders share a rule. Rules can't target services inside
+  `svchost.exe` individually.
+- `exclude` can't make a program bypass duolink, only keep it on one line
+  (routes are per destination). Documented in README and decisions.md.
+- The owner lookup reads the whole TCP or UDP table on a miss. Cheap for
+  normal socket counts; worth measuring if a machine has tens of thousands
+  of sockets (stats line `owner unknown` would also show misses).
 - `go test -race` needs cgo (a C compiler), which isn't set up; the
   concurrency in the balancer is covered by review and unit tests only.
 - If every line fails its health check, flows are spread over all lines

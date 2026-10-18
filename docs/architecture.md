@@ -104,6 +104,33 @@ and its timer restarts. Otherwise WRR picks a line and the entry is
 (re)written. A sweeper drops expired entries every minute. Stickiness is per
 destination IP, not per port or app.
 
+## Per-app rules
+
+```
+ new flow (app src 198.18.0.1:port, dst) ──► forwarder.ruleFor
+   procTable.lookup(tcp|udp, src)
+     owner snapshot (GetExtendedTcpTable / GetExtendedUdpTable): addr:port → PID
+       miss and snapshot older than this lookup → re-read once
+       UDP also tries 0.0.0.0:port (unconnected sockets)
+     PID → exe (OpenProcess + QueryFullProcessImageName), cached 10 s
+   procRules.forExe(exe) → flowRule {none | sticky-exempt | pin line | exclude → primary}
+ ──► balancer.PickFor(dst, rule)
+       pin / exclude: rule.line if it's a candidate, else WRR
+       sticky-exempt: WRR, sticky table untouched
+       none:          sticky table, else WRR (as before)
+```
+
+The app's TCP handshake with the netstack is complete before the forwarder
+gets the flow, so the app's socket is always in the owner table. Snapshots
+are ordered with a counter, not timestamps (Windows' clock ticks too coarsely
+to order events microseconds apart): a lookup re-reads only if no read
+started after it began waiting, so a burst of new flows shares one read.
+`procs` is nil when no rules are configured, so then no lookups happen.
+
+`resolveRules` runs at startup: pin targets are matched like weights and must
+have a non-zero weight; the primary line for `exclude` is the weighted line
+with the lowest interface metric.
+
 ## Config
 
 `config.go`: `defaultConfig()` → JSON from `duolink.json` decoded on top (unknown
@@ -123,6 +150,8 @@ Weights stay as name → number until `run` knows the adapters, then
 | `forward.go` | netstack TransportHandler: flow filtering, loop guard, TCP/UDP copy, stats |
 | `balance.go` | WRR, stickiness, health checks, failed-dial tracking, line state transitions, weight parsing |
 | `netwatch.go` | adapter change subscriptions, `adapterIssue` |
+| `proc.go` | flow → process lookup (`GetExtendedTcpTable` / `GetExtendedUdpTable`, `QueryFullProcessImageName`) |
+| `rules.go` | per-app rules: resolution against the uplinks, `flowRule` |
 | `config.go` | `duolink.json`, flag overrides, `duolink config` |
 | `*_test.go` | unit tests (no admin or network needed) |
 

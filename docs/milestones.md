@@ -74,12 +74,34 @@ Tested:
   (exact log lines on unplug/replug, Wi-Fi disconnect, dead DSL behind a
   working LAN, dead destinations → "stays UP").
 
+### 8. Per-app rules
+Status: done (partially tested).
+Delivered:
+- Flow → process lookup: the app socket's address (198.18.0.1:port) in
+  `GetExtendedTcpTable` / `GetExtendedUdpTable` (UDP also matches 0.0.0.0:port),
+  PID → exe via `QueryFullProcessImageName`. Table snapshots are shared by
+  concurrent lookups and re-read on a miss; PID names cached 10 s.
+- `processes` in duolink.json: `sticky_exempt` (default `["steam.exe"]`),
+  `pin` (exe → line, balanced while that line is DOWN), `exclude` (always the
+  lowest-metric line, or another while it's DOWN). One list per exe.
+- Startup prints the rules; stats show flows per rule and unknown owners.
+- Unit tests: rule resolution, pick behaviour per rule (incl. fallback),
+  config validation, and the real socket-table lookups on loopback sockets.
+Tested:
+- Pin (`chrome.exe` → Wi-Fi, with `steam.exe` sticky-exempt in the config):
+  works.
+- Performance, measured on the test PC (about 140 TCP / 70 UDP sockets):
+  reading the TCP owner table takes about 0.12 ms, the UDP table about
+  0.06 ms, once per new connection; no effect on throughput.
+- Not reported yet: Steam `sticky-exempt` count during a download, pin
+  fallback, exclude, config error messages, no-rules run.
+
 ## Planned
 
 | # | Milestone | Status |
 |---|---|---|
 | 7 | Instant failover: mark a line DOWN as soon as its adapter disconnects, or probe at once after 2 failed dials to different destinations | done (partially tested) |
-| 8 | Per-process rules via `GetExtendedTcpTable` / `GetExtendedUdpTable` (flow's local port → PID → exe): `sticky_exempt` (default `["steam.exe"]`), `pin` (process → line, with fallback when that line is down), `exclude` (not balanced). Configured in duolink.json | next |
-| 9 | System tray app: `duolink tray`, no console, Start/Pause, speeds, Quit with cleanup, single instance, autostart via Task Scheduler with highest privileges | planned |
+| 8 | Per-process rules via `GetExtendedTcpTable` / `GetExtendedUdpTable` (flow's local port → PID → exe): `sticky_exempt` (default `["steam.exe"]`), `pin` (process → line, with fallback when that line is down), `exclude` (not balanced). Configured in duolink.json | done (partially tested) |
+| 9 | System tray app: `duolink tray`, no console, Start/Pause, speeds, Quit with cleanup, single instance, autostart via Task Scheduler with highest privileges | next |
 | 10 | Small window opened from the tray; X hides it to the tray, only Quit exits | planned |
 | later | Metered/phone lines with a data cap; hot-plugging uplinks; automatic weights from passive throughput measurement; IPv6 | ideas |

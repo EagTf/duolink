@@ -123,6 +123,11 @@ errors.
     "timeout_seconds": 3,
     "targets": ["1.1.1.1:443", "8.8.8.8:443"]
   },
+  "processes": {
+    "sticky_exempt": ["steam.exe"],
+    "pin": { "game.exe": "eth" },
+    "exclude": ["backup.exe"]
+  },
   "udp_idle_seconds": 60
 }
 ```
@@ -132,7 +137,28 @@ errors.
 | `weights` | Share of new flows per line. Empty = 1 for every line. Lines not listed get 0 (unused). |
 | `sticky` | A destination IP that got a flow in the last `minutes` keeps using the same line, so sites and game servers see one public IP. |
 | `health` | Every `interval_seconds`, duolink TCP-connects to `targets` through each line (no data is sent). A line that fails gets no new flows and is re-checked every `down_interval_seconds`. |
+| `processes` | Per-app rules, by exe file name (case doesn't matter). See below. |
 | `udp_idle_seconds` | A UDP flow ends after this long with no packets. |
+
+### Per-app rules
+
+duolink finds which program opened each connection and applies its rule:
+
+- **`sticky_exempt`**: always balanced per connection, ignoring stickiness.
+  For apps that download over many connections to the same few servers.
+  Default: `["steam.exe"]`.
+- **`pin`**: always use one line, e.g. `{"game.exe": "eth"}` for a game that
+  should stay on the steadier line. If that line is down, its connections are
+  balanced over the others until it's back.
+- **`exclude`**: don't balance this app. It always uses the line Windows
+  itself would pick (the one with the lowest interface metric, shown by
+  `duolink list`), or another line while that one is down. Its traffic still
+  passes through duolink; it's just never spread.
+
+An app can be in only one list. Programs not listed are balanced normally
+with stickiness. The live stats show how many connections each rule applied
+to. Setting a list to `[]` removes the default (e.g. to pin Steam, set
+`"sticky_exempt": []`).
 
 ## Known limits
 

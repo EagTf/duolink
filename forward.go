@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,13 +36,24 @@ type forwarder struct {
 
 	loops    atomic.Int64
 	loopOnce sync.Once
+
+	// Process rules (milestone 8). procs is nil when no rules are configured,
+	// so no lookups happen at all.
+	rules     *procRules
+	procs     *procTable
+	ruleMu    sync.Mutex
+	ruleFlows map[string]int64 // exe → flows a rule applied to
+	unknown   atomic.Int64     // flows whose owning process wasn't found
 }
 
-func newForwarder(ups []*Adapter, bal *balancer, udpIdle time.Duration) *forwarder {
-	f := &forwarder{bal: bal, udpIdle: udpIdle, stats: map[*Adapter]*linkStats{}, own: map[netip.Addr]bool{}}
+func newForwarder(ups []*Adapter, bal *balancer, rules *procRules, udpIdle time.Duration) *forwarder {
+	f := &forwarder{bal: bal, rules: rules, ruleFlows: map[string]int64{}, udpIdle: udpIdle, stats: map[*Adapter]*linkStats{}, own: map[netip.Addr]bool{}}
 	for _, a := range ups {
 		f.stats[a] = &linkStats{}
 		f.own[a.IPv4.Addr()] = true
+	}
+	if rules != nil && !rules.empty() {
+		f.procs = newProcTable()
 	}
 	return f
 }
@@ -78,6 +90,48 @@ func (f *forwarder) accept(src, dst netip.AddrPort) bool {
 
 var tunPrefix = netip.MustParsePrefix(tunAddr + "/30")
 
+// ruleFor finds the process that opened this flow and returns its rule.
+// src is the app's side of the flow (its socket's local address).
+func (f *forwarder) ruleFor(udp bool, src netip.AddrPort) flowRule {
+	if f.procs == nil {
+		return flowRule{}
+	}
+	exe := f.procs.lookup(udp, src)
+	if exe == "" {
+		f.unknown.Add(1)
+		return flowRule{}
+	}
+	r := f.rules.forExe(exe)
+	if r.kind != ruleNone {
+		f.ruleMu.Lock()
+		f.ruleFlows[exe]++
+		f.ruleMu.Unlock()
+	}
+	return r
+}
+
+// ruleSummary is the stats line for process rules, or "" if nothing to show.
+func (f *forwarder) ruleSummary() string {
+	if f.procs == nil {
+		return ""
+	}
+	var parts []string
+	f.ruleMu.Lock()
+	for _, exe := range f.rules.exes() {
+		if n := f.ruleFlows[exe]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%s %s %d", exe, f.rules.forExe(exe).kind, n))
+		}
+	}
+	f.ruleMu.Unlock()
+	if n := f.unknown.Load(); n > 0 {
+		parts = append(parts, fmt.Sprintf("owner unknown %d", n))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "rules (flows): " + strings.Join(parts, ", ")
+}
+
 // HandleTCP and HandleUDP must return quickly: gVisor calls the UDP handler
 // inline on its packet path, and tun2socks only frees the TCP handshake slot
 // once HandleTCP returns. So each flow gets its own goroutine.
@@ -102,7 +156,7 @@ func (f *forwarder) tcp(c adapter.TCPConn) {
 	if !f.accept(src, dst) {
 		return
 	}
-	up := f.bal.Pick(dst.Addr())
+	up := f.bal.PickFor(dst.Addr(), f.ruleFor(false, src))
 	if up == nil {
 		return // no healthy uplink: closing sends a RST to the app
 	}
@@ -139,7 +193,7 @@ func (f *forwarder) udp(c adapter.UDPConn) {
 	if !f.accept(src, dst) {
 		return
 	}
-	up := f.bal.Pick(dst.Addr())
+	up := f.bal.PickFor(dst.Addr(), f.ruleFor(true, src))
 	if up == nil {
 		return
 	}
@@ -248,7 +302,11 @@ func (f *forwarder) printStats(ctx context.Context, ups []*Adapter, weights map[
 			fmt.Printf("%s  %-12s %-4s w%-3d down %5.1f  up %5.1f Mbit/s  tcp %4d  udp %3d  flows %6d  sticky dsts %4d\n",
 				when, a.Name, state, weights[a], down, up, st.tcp.Load(), st.udp.Load(), st.flows.Load(), sticky[a])
 		}
-		fmt.Printf("          %-12s %-4s %-4s down %5.1f  up %5.1f Mbit/s\n\n", "total", "", "", totRx, totTx)
+		fmt.Printf("          %-12s %-4s %-4s down %5.1f  up %5.1f Mbit/s\n", "total", "", "", totRx, totTx)
+		if s := f.ruleSummary(); s != "" {
+			fmt.Println("         ", s)
+		}
+		fmt.Println()
 	}
 }
 

@@ -82,6 +82,11 @@ func cmdRun(args []string) error {
 	} else {
 		fmt.Println("stickiness: off, every flow is balanced on its own")
 	}
+	rules, err := resolveRules(cfg.Processes, ups, weights)
+	if err != nil {
+		return err
+	}
+	fmt.Println("process rules:", rules.describe())
 
 	// A previous run that crashed may have left routes behind.
 	removeLeftovers(all)
@@ -114,7 +119,7 @@ func cmdRun(args []string) error {
 
 	// The netstack: every TCP/UDP flow Windows routes into the TUN is
 	// terminated here and handed to the forwarder.
-	fwd := newForwarder(ups, bal, time.Duration(cfg.UDPIdleSeconds)*time.Second)
+	fwd := newForwarder(ups, bal, rules, time.Duration(cfg.UDPIdleSeconds)*time.Second)
 	st, err := core.CreateStack(&core.Config{LinkEndpoint: dev, TransportHandler: fwd})
 	if err != nil {
 		return fmt.Errorf("start netstack: %w", err)

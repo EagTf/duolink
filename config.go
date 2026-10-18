@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -19,8 +20,9 @@ type Config struct {
 	// names like --weights does. Empty = every usable uplink gets 1.
 	Weights map[string]int `json:"weights"`
 
-	Sticky StickyConfig `json:"sticky"`
-	Health HealthConfig `json:"health"`
+	Sticky    StickyConfig  `json:"sticky"`
+	Health    HealthConfig  `json:"health"`
+	Processes ProcessConfig `json:"processes"`
 
 	// A UDP flow ends after this long with no packets in either direction.
 	UDPIdleSeconds int `json:"udp_idle_seconds"`
@@ -32,6 +34,20 @@ type Config struct {
 type StickyConfig struct {
 	Enabled bool `json:"enabled"`
 	Minutes int  `json:"minutes"`
+}
+
+// ProcessConfig holds per-app rules, keyed by exe file name (case-insensitive,
+// e.g. "steam.exe"). Each exe may appear in only one of them.
+type ProcessConfig struct {
+	// Balanced per flow even with stickiness on: for apps that download over
+	// many connections to the same few servers.
+	StickyExempt []string `json:"sticky_exempt"`
+	// exe → line (matched like weights: "eth", "wifi"). Always that line;
+	// balanced normally while it's DOWN.
+	Pin map[string]string `json:"pin"`
+	// Not balanced: always the line Windows itself would use (lowest
+	// interface metric), or another one while that's DOWN.
+	Exclude []string `json:"exclude"`
 }
 
 type HealthConfig struct {
@@ -50,6 +66,11 @@ func defaultConfig() Config {
 			DownIntervalSeconds: 4,
 			TimeoutSeconds:      3,
 			Targets:             []string{"1.1.1.1:443", "8.8.8.8:443"},
+		},
+		Processes: ProcessConfig{
+			StickyExempt: []string{"steam.exe"},
+			Pin:          map[string]string{},
+			Exclude:      []string{},
 		},
 		UDPIdleSeconds: 60,
 	}
@@ -85,6 +106,32 @@ func (c *Config) validate() error {
 		check(err == nil && ap.Addr().Is4(), "health.targets: %q is not an IPv4 ip:port", t)
 	}
 	check(c.UDPIdleSeconds >= 5, "udp_idle_seconds: must be at least 5")
+
+	seen := map[string]string{} // exe → list it's in
+	addExe := func(list, exe string) {
+		e := strings.ToLower(exe)
+		check(strings.HasSuffix(e, ".exe") && !strings.ContainsAny(e, `\/`),
+			"processes.%s: %q must be an exe file name like steam.exe", list, exe)
+		if prev, dup := seen[e]; dup {
+			hint := ""
+			if prev == "sticky_exempt" && e == "steam.exe" {
+				hint = ` (steam.exe is in sticky_exempt by default; set "sticky_exempt": [] to remove it)`
+			}
+			check(false, "processes: %s is in both %s and %s; use one%s", exe, prev, list, hint)
+		}
+		seen[e] = list
+	}
+	p := c.Processes
+	for _, e := range p.StickyExempt {
+		addExe("sticky_exempt", e)
+	}
+	for e, line := range p.Pin {
+		addExe("pin", e)
+		check(line != "", "processes.pin.%s: needs a line name, e.g. \"eth\"", e)
+	}
+	for _, e := range p.Exclude {
+		addExe("exclude", e)
+	}
 	return errors.Join(errs...)
 }
 
