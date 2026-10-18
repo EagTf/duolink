@@ -3,6 +3,20 @@
 Not released yet. Entries are by milestone; see
 [docs/milestones.md](docs/milestones.md) for test results.
 
+## Milestone 12: recovery, hot-plug, friendlier per-app rules
+
+- When a line comes back after an outage, the destinations that moved to
+  the other line during it are balanced over both lines again.
+- Lines follow the adapters while duolink runs: a new adapter (e.g. a new
+  Wi-Fi stick) is picked up with its configured weight, an adapter that
+  returns with a new address or interface index is used at the new address,
+  and a removed adapter is dropped. New and changed lines are probed before
+  they get traffic. No more "restart duolink to use it".
+- Pins and "never balance" follow a line whose adapter was replaced.
+- Settings: per-app rules as a list with Browse… (pick the program's .exe),
+  a rule dropdown (pin to a connected line by name) and Add / update /
+  Remove.
+
 ## Milestone 11: settings in the window
 
 - Settings window (button in the status window, "Settings…" in the tray

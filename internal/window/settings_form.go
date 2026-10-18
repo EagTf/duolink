@@ -3,7 +3,6 @@ package window
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -28,7 +27,7 @@ type form struct {
 
 	UDPIdle string
 
-	Exempt, Exclude, Pin string // one entry per line; Pin lines are "exe = line"
+	Rules []ruleRow // per-app rules, one per program
 }
 
 // formFromConfig fills the form from c, with one weight field per line in
@@ -49,8 +48,7 @@ func formFromConfig(c config.Config, lines []string) form {
 		Failures:     strconv.Itoa(c.Health.FailuresBeforeDown),
 		Targets:      strings.Join(c.Health.Targets, ", "),
 		UDPIdle:      strconv.Itoa(c.UDPIdleSeconds),
-		Exempt:       strings.Join(c.Processes.StickyExempt, "\r\n"),
-		Exclude:      strings.Join(c.Processes.Exclude, "\r\n"),
+		Rules:        rowsFromConfig(c.Processes, lines),
 	}
 	adapters := make([]*netif.Adapter, len(lines))
 	for i, name := range lines {
@@ -69,12 +67,6 @@ func formFromConfig(c config.Config, lines []string) form {
 		}
 		f.Weights = append(f.Weights, strconv.Itoa(w))
 	}
-	var pins []string
-	for exe, line := range c.Processes.Pin {
-		pins = append(pins, exe+" = "+line)
-	}
-	sort.Strings(pins)
-	f.Pin = strings.Join(pins, "\r\n")
 	return f
 }
 
@@ -114,21 +106,7 @@ func (f form) toConfig() (config.Config, error) {
 	c.Health.Targets = splitList(f.Targets)
 	c.UDPIdleSeconds = num("UDP idle", f.UDPIdle)
 
-	c.Processes.StickyExempt = splitList(f.Exempt)
-	c.Processes.Exclude = splitList(f.Exclude)
-	c.Processes.Pin = map[string]string{}
-	for i, l := range strings.Split(strings.ReplaceAll(f.Pin, "\r", ""), "\n") {
-		l = strings.TrimSpace(l)
-		if l == "" {
-			continue
-		}
-		exe, line, ok := strings.Cut(l, "=")
-		if !ok || strings.TrimSpace(exe) == "" || strings.TrimSpace(line) == "" {
-			errs = append(errs, fmt.Errorf("Pin, line %d: %q should look like game.exe = eth", i+1, l))
-			continue
-		}
-		c.Processes.Pin[strings.TrimSpace(exe)] = strings.TrimSpace(line)
-	}
+	c.Processes = rowsToConfig(f.Rules)
 
 	if len(errs) > 0 {
 		return c, errors.Join(errs...)

@@ -75,10 +75,29 @@ carry partial data and come in bursts. Coalescing the burst and comparing
 each line with its startup state (`netif.Issue`) is simpler and can't miss
 a change.
 
-**A changed address or interface index is reported, not followed.** Sockets
-are bound to the address seen at startup. Following changes live is part of
-the hot-plugging idea; until then the line stays DOWN and the log says to
-restart.
+**Lines follow the adapters while running (hot-plug).** Adapters are tracked
+by LUID. A line whose adapter comes back at a new address or interface index
+is replaced by a fresh line at the new address (same weight), rather than
+updated in place: sockets bind to address and index, and an immutable
+adapter per line means no locking on the dial path. A removed adapter's
+line is dropped instead of kept as a dead row; if the adapter returns it's
+a new line. New usable adapters get their weight from the config (1 with no
+weights; 0 if weights are set and none names it). Every new or replaced
+line starts DOWN and needs one good probe, so a half-connected adapter never
+gets flows. Pins and "exclude" are resolved by name at each pick, so they
+follow a replaced line.
+
+**After an outage, destinations that moved are rebalanced.** A sticky entry
+created while a line was DOWN is marked; when a line comes back UP those
+entries are forgotten, so the next connection to them is balanced over all
+lines again. Without this, a long download that reconnects to the same
+servers kept them on the surviving line for good (seen in the milestone 7
+test). Entries from before the outage keep their line, so most sites still
+see one IP.
+
+**Per-app rules are edited as a list, one rule per program.** A file picker
+and a line dropdown replace typed `exe = line` text; a program can only
+have one rule, so "listed twice" can't happen from the window.
 
 **Existing flows never move.** A TCP connection's source IP is fixed;
 moving it to another line would break it. Only new flows react to health

@@ -151,7 +151,7 @@ func Start(o Options) (_ *Engine, err error) {
 
 	// The netstack: every TCP/UDP flow Windows routes into the TUN is
 	// terminated here and handed to the forwarder.
-	e.fwd = forward.New(e.ups, e.bal, rules, cfg.UDPIdle())
+	e.fwd = forward.New(e.bal, rules, cfg.UDPIdle())
 	st, err := core.CreateStack(&core.Config{LinkEndpoint: dev, TransportHandler: e.fwd})
 	if err != nil {
 		return nil, fmt.Errorf("start netstack: %w", err)
@@ -205,9 +205,6 @@ func (e *Engine) Stop() {
 		}
 	})
 }
-
-// Uplinks returns the lines this run balances over.
-func (e *Engine) Uplinks() []*netif.Adapter { return e.ups }
 
 // retryable marks a Start error that happened before anything on the system
 // changed, so retrying it costs nothing and can't disturb the network.

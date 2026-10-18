@@ -84,6 +84,34 @@ func TestIssue(t *testing.T) {
 	}
 }
 
+func TestMoved(t *testing.T) {
+	orig := &Adapter{Index: 16, IPv4: netip.MustParsePrefix("192.168.1.20/24"), Gateway: netip.MustParseAddr("192.168.1.1"), Up: true}
+	mod := func(f func(a *Adapter)) *Adapter {
+		c := *orig
+		f(&c)
+		return &c
+	}
+	cases := []struct {
+		name string
+		cur  *Adapter
+		want bool
+	}{
+		{"unchanged", mod(func(*Adapter) {}), false},
+		{"removed", nil, false},
+		{"new DHCP address", mod(func(a *Adapter) { a.IPv4 = netip.MustParsePrefix("192.168.1.30/24") }), true},
+		{"re-plugged, new index", mod(func(a *Adapter) { a.Index = 22 }), true},
+		{"new address but not usable yet", mod(func(a *Adapter) {
+			a.IPv4 = netip.MustParsePrefix("192.168.1.30/24")
+			a.Skip = "no default gateway (not an internet uplink)"
+		}), false},
+	}
+	for _, c := range cases {
+		if got := Moved(orig, c.cur); got != c.want {
+			t.Errorf("%s: Moved = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // The subscriptions only listen (no admin, nothing changes), so this checks
 // the real Win32 calls and the callback signature without touching the system.
 func TestWatchSubscribes(t *testing.T) {

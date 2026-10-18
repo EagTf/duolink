@@ -74,6 +74,53 @@ if something breaks your connection.
 4. Unplug a line during the download: it still goes DOWN within about a
    second (`adapter disconnected`), as before.
 
+## Recovery and hot-plug
+
+With the tray running (admin) and the status window open:
+
+1. **Rebalance after an outage.** Start a Steam download (both lines carry
+   traffic). Disconnect Wi-Fi: Wi-Fi DOWN, the download continues on
+   Ethernet. Reconnect it: after `Wi-Fi is back UP`, the events show
+   `rebalancing N destinations that moved during the outage`, and within a
+   minute or so Wi-Fi carries download traffic again without pausing Steam.
+2. **New adapter.** Plug in a second network adapter (the new Wi-Fi stick,
+   or a phone via USB tethering) and connect it: events show
+   `<name>: new line (weight 1); probing it`, then `<name> is back UP`; a new
+   row appears in the window's table and the tray menu, and new connections
+   use it.
+3. **Removed adapter.** Unplug a USB adapter: `<name> is DOWN (adapter
+   removed)`, then `adapter removed; no longer a line`; its row disappears.
+   Plug it back in and connect: it's added again as a new line.
+4. **New address.** For a line that stays plugged in, force a new address:
+   `ipconfig /release "Wi-Fi"` then `ipconfig /renew "Wi-Fi"` (or change the
+   PC's DHCP reservation on router B). If the address changes, events show
+   `Wi-Fi: now at <new> ... (was <old> ...); probing it`, then back UP. If
+   the router hands out the same address, it just goes DOWN and back UP.
+5. **Pins follow.** With `discord.exe` pinned to Ethernet, after steps 3–4
+   on Ethernet (if possible) Discord's connections are still on Ethernet
+   (status window rules line `discord.exe pinned N` grows).
+6. **Loop guard.** After any of these, `duolink list --ip` in a second
+   terminal still shows each line's own public IP (no routing loop).
+
+## Per-app rules (Settings)
+
+1. **List.** Settings shows one row per program: `discord.exe: pinned to
+   Ethernet`, `steam.exe: balance every connection`.
+2. **Edit.** Click a row: its program and rule appear below. Change the
+   rule (e.g. pin to Wi-Fi), Add / update: the row changes. Save and apply:
+   duolink.json has `"discord.exe": "Wi-Fi"`; set it back afterwards.
+3. **Browse.** Browse… opens the Windows Open dialog for programs; pick an
+   .exe (e.g. a game in Steam's folder): its file name appears. Choose a
+   rule, Add / update: a new row. Remove it again.
+4. **Type a name.** Type `game` (no .exe), Add / update: red message that
+   it should end in .exe. `game.exe` works.
+5. **One rule per program.** Add `steam.exe` with "Never balance": the
+   existing steam.exe row changes instead of a second row appearing.
+6. **Line not connected.** A pin in duolink.json to a line that isn't
+   connected (e.g. `"game.exe": "phone"`) shows as `pinned to phone` with a
+   "(not connected)" choice in the dropdown; Save and apply refuses it with
+   `Pin game.exe: no usable uplink matches "phone"`.
+
 ## Settings window
 
 With the tray running (admin):

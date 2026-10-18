@@ -209,6 +209,21 @@ with stickiness. The live stats show how many connections each rule applied
 to. Setting a list to `[]` removes the default (e.g. to pin Steam, set
 `"sticky_exempt": []`).
 
+In the tray app, **Settings → Per-app rules** shows the rules as a list:
+pick a program with **Browse…** (or type its name), choose "Balance every
+connection", "Never balance" or "Pin to" one of your lines, and click
+**Add / update**. Select a rule to change or remove it.
+
+### Adapters coming and going
+
+duolink follows your adapters while it runs. Plug in a new one (say a new
+Wi-Fi stick or a tethered phone) and it becomes a new line, with its weight
+from the settings (1 if you haven't set any). An adapter that comes back
+with a new address is used at the new address, and an unplugged one is
+dropped. Each new or changed line is checked first and only gets traffic
+once it works. After a line comes back from an outage, the sites that had
+moved to the other line are spread over both lines again.
+
 ## Known limits
 
 - **Ping doesn't work for internet addresses** while duolink runs. duolink

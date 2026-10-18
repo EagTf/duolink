@@ -38,8 +38,8 @@ type linkStats struct {
 type Forwarder struct {
 	bal     *balance.Balancer // picks the uplink for each new flow and hears how dials went
 	udpIdle time.Duration
-	stats   map[*netif.Adapter]*linkStats
-	own     map[netip.Addr]bool // our uplinks' IPs; seeing one as a flow source = loop
+	statsMu sync.Mutex
+	stats   map[*netif.Adapter]*linkStats // per line; lines can appear while running
 
 	loops    atomic.Int64
 	loopOnce sync.Once
@@ -53,16 +53,25 @@ type Forwarder struct {
 	unknown   atomic.Int64     // flows whose owning process wasn't found
 }
 
-func New(ups []*netif.Adapter, bal *balance.Balancer, rules *balance.Rules, udpIdle time.Duration) *Forwarder {
-	f := &Forwarder{bal: bal, rules: rules, ruleFlows: map[string]int64{}, udpIdle: udpIdle, stats: map[*netif.Adapter]*linkStats{}, own: map[netip.Addr]bool{}}
-	for _, a := range ups {
-		f.stats[a] = &linkStats{}
-		f.own[a.IPv4.Addr()] = true
-	}
+func New(bal *balance.Balancer, rules *balance.Rules, udpIdle time.Duration) *Forwarder {
+	f := &Forwarder{bal: bal, rules: rules, ruleFlows: map[string]int64{}, udpIdle: udpIdle, stats: map[*netif.Adapter]*linkStats{}}
 	if rules != nil && !rules.Empty() {
 		f.procs = procs.NewTable()
 	}
 	return f
+}
+
+// statsFor returns a's counters, creating them for a line that appeared
+// while running.
+func (f *Forwarder) statsFor(a *netif.Adapter) *linkStats {
+	f.statsMu.Lock()
+	defer f.statsMu.Unlock()
+	st := f.stats[a]
+	if st == nil {
+		st = &linkStats{}
+		f.stats[a] = st
+	}
+	return st
 }
 
 // endpoints returns the flow's app-side source and real destination.
@@ -82,7 +91,7 @@ func endpoints(id stack.TransportEndpointID) (src, dst netip.AddrPort) {
 //     SSDP and NetBIOS broadcasts out of every adapter, including ours. Those
 //     mean nothing on the internet.
 func (f *Forwarder) accept(src, dst netip.AddrPort) bool {
-	if f.own[src.Addr()] {
+	if f.bal.IsUplinkIP(src.Addr()) {
 		f.loops.Add(1)
 		f.loopOnce.Do(func() {
 			fmt.Fprintf(os.Stderr, "ROUTING LOOP: a flow from our own uplink address %s (to %s) came back into the TUN. "+
@@ -165,7 +174,7 @@ func (f *Forwarder) tcp(c adapter.TCPConn) {
 	if up == nil {
 		return // no healthy uplink: closing sends a RST to the app
 	}
-	st := f.stats[up]
+	st := f.statsFor(up)
 	st.flows.Add(1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -202,7 +211,7 @@ func (f *Forwarder) udp(c adapter.UDPConn) {
 	if up == nil {
 		return
 	}
-	st := f.stats[up]
+	st := f.statsFor(up)
 	st.flows.Add(1)
 
 	// The netstack hands us one conn per (app src, dst) pair, and we give it
@@ -279,7 +288,7 @@ type Counters struct {
 
 // Counters returns a's current counters.
 func (f *Forwarder) Counters(a *netif.Adapter) Counters {
-	st := f.stats[a]
+	st := f.statsFor(a)
 	return Counters{Rx: st.rx.Load(), Tx: st.tx.Load(), TCP: st.tcp.Load(), UDP: st.udp.Load(), Flows: st.flows.Load()}
 }
 

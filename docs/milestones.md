@@ -220,6 +220,34 @@ Tested (steps in docs/testing.md, "Settings window"), all passed:
 - Suggested during the test: friendlier per-app rule editing (file picker,
   line dropdown for pins). Noted in docs/action_items.md.
 
+## Awaiting test
+
+### 12. Recovery after failover, hot-plug, friendlier per-app rules
+Status: awaiting test.
+Delivered:
+- After an outage: sticky entries created while a line was DOWN are
+  forgotten when a line comes back UP, so those destinations are balanced
+  over all lines again (log: `rebalancing N destinations that moved during
+  the outage`). Entries from before the outage keep their line.
+- Hot-plug, adapters tracked by LUID: a line whose adapter returns at a new
+  address or interface index becomes a new line at the new address (same
+  weight; log: `now at ... (was ...); probing it`); a removed adapter is
+  dropped (`adapter removed; no longer a line`); a new usable adapter is
+  added with its configured weight (`new line (weight N); probing it`). New
+  and replaced lines start DOWN until a probe succeeds. Health loops, the
+  loop guard, stats, the tray menu and the window follow the current lines.
+- Pins and "exclude" are resolved by line name at each pick, so they follow
+  a replaced adapter.
+- Settings window: per-app rules as a list (one rule per program), with a
+  program field, Browse… (standard Open dialog for an .exe), a rule
+  dropdown (balance every connection, never balance, pin to each connected
+  line) and Add / update / Remove.
+- Tests: rebalancing after recovery; moved, removed and new adapters;
+  weights for new lines; pins following a replaced line; health loops
+  starting for new lines; rule list conversion, options, upsert, exe names,
+  the Open-dialog struct size. Layout checked by rendering off-screen.
+Tested: (pending)
+
 ## Planned
 
 | # | Milestone | Status |
@@ -229,4 +257,5 @@ Tested (steps in docs/testing.md, "Settings window"), all passed:
 | 9 | System tray app: `duolink tray`, no console, Start/Pause, speeds, Quit with cleanup, single instance, autostart via Task Scheduler with highest privileges | done (logon start pending) |
 | 10 | Small window opened from the tray; X hides it to the tray, only Quit exits | done |
 | 11 | Settings in the window, so it's the full app: edit everything in duolink.json (weights, stickiness, health checks, per-app rules) with explanations, validation before saving, and Apply (restarts duolink with the new settings) | done |
-| later | Metered/phone lines with a data cap; hot-plugging uplinks; automatic weights from passive throughput measurement; IPv6 | ideas |
+| 12 | Recovery after failover (rebalance destinations that moved during an outage), hot-plug (lines follow adapters that come, go or change address), friendlier per-app rules (list, file picker, line dropdown) | awaiting test |
+| later | Metered/phone lines with a data cap; automatic weights from passive throughput measurement; IPv6 | ideas |

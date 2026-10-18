@@ -70,13 +70,13 @@ func Watch(ctx context.Context, onChange func()) error {
 	return nil
 }
 
-// Issue compares an uplink as it was at startup with its current state
-// and returns why it can't carry traffic now, or "" if it still can. cur is
-// nil if the adapter no longer exists.
+// Issue compares an uplink as duolink knows it with its current state and
+// returns why it can't carry traffic now, or "" if it still can. cur is nil
+// if the adapter no longer exists.
 //
-// A changed address or interface index is reported, not followed: sockets are
-// bound to the startup address, so using the new one needs a restart.
-// (Picking up such changes live is the "hot-plugging" item in the plan.)
+// A changed address or interface index on a usable adapter isn't an issue:
+// Moved reports that, and the balancer switches to the new address. Issue
+// only mentions it while the adapter isn't usable yet (e.g. no gateway).
 func Issue(orig, cur *Adapter) string {
 	switch {
 	case cur == nil:
@@ -85,14 +85,23 @@ func Issue(orig, cur *Adapter) string {
 		return "adapter disconnected"
 	case !cur.IPv4.IsValid() || cur.IPv4.Addr().IsLinkLocalUnicast():
 		return "adapter lost its IPv4 address"
-	case cur.IPv4.Addr() != orig.IPv4.Addr():
-		return fmt.Sprintf("address changed from %s to %s; restart duolink to use it", orig.IPv4.Addr(), cur.IPv4.Addr())
-	case cur.Index != orig.Index:
-		return "interface index changed; restart duolink to use it"
 	case !cur.Gateway.IsValid():
 		return "adapter lost its default gateway"
+	case cur.IPv4.Addr() != orig.IPv4.Addr():
+		return fmt.Sprintf("address changed from %s to %s", orig.IPv4.Addr(), cur.IPv4.Addr())
+	case cur.Index != orig.Index:
+		return "interface index changed"
 	}
 	return ""
+}
+
+// Moved reports whether cur, the same adapter as orig (same LUID), is usable
+// at a different address or interface index: a new DHCP lease, or a USB
+// adapter plugged back in. Sockets are bound to address and index, so the
+// line has to be used through the new ones from now on.
+func Moved(orig, cur *Adapter) bool {
+	return cur != nil && cur.Usable() &&
+		(cur.IPv4.Addr() != orig.IPv4.Addr() || cur.Index != orig.Index)
 }
 
 // FindByLUID returns the adapter with the given LUID, or nil. The LUID stays

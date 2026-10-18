@@ -156,3 +156,58 @@ func utf16(s string) *uint16 {
 }
 
 func ptr[T any](p *T) uintptr { return uintptr(unsafe.Pointer(p)) }
+
+// Settings window: list box, drop-down list and the standard "Open" dialog.
+var (
+	comdlg32          = windows.NewLazySystemDLL("comdlg32.dll")
+	pGetOpenFileNameW = comdlg32.NewProc("GetOpenFileNameW")
+)
+
+const (
+	wsBorder        = 0x00800000
+	lbsNotify       = 0x0001 // list box tells its parent when the selection changes
+	lbAddString     = 0x0180
+	lbResetContent  = 0x0184
+	lbSetCurSel     = 0x0186
+	lbGetCurSel     = 0x0188
+	lbnSelChange    = 1
+	cbsDropDownList = 0x0003 // a drop-down you pick from, can't type into
+	cbAddString     = 0x0143
+	cbGetCurSel     = 0x0147
+	cbResetContent  = 0x014B
+	cbSetCurSel     = 0x014E
+
+	ofnHideReadOnly  = 0x00000004
+	ofnNoChangeDir   = 0x00000008
+	ofnPathMustExist = 0x00000800
+	ofnFileMustExist = 0x00001000
+	ofnExplorer      = 0x00080000
+)
+
+// openFileName is OPENFILENAMEW, for GetOpenFileNameW. Go's field alignment
+// matches the C struct on amd64.
+type openFileName struct {
+	structSize    uint32
+	owner         uintptr
+	instance      uintptr
+	filter        *uint16
+	customFilter  *uint16
+	maxCustFilter uint32
+	filterIndex   uint32
+	file          *uint16
+	maxFile       uint32
+	fileTitle     *uint16
+	maxFileTitle  uint32
+	initialDir    *uint16
+	title         *uint16
+	flags         uint32
+	fileOffset    uint16
+	fileExtension uint16
+	defExt        *uint16
+	custData      uintptr
+	hook          uintptr
+	templateName  *uint16
+	reserved      uintptr
+	reserved2     uint32
+	flagsEx       uint32
+}
