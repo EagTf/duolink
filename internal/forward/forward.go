@@ -36,10 +36,16 @@ type linkStats struct {
 // net.Conn for the app's side. We dial the real destination through a chosen
 // uplink and copy bytes both ways.
 type Forwarder struct {
-	bal     *balance.Balancer // picks the uplink for each new flow and hears how dials went
-	udpIdle time.Duration
-	stats   map[*netif.Adapter]*linkStats
-	own     map[netip.Addr]bool // our uplinks' IPs; seeing one as a flow source = loop
+	bal       *balance.Balancer // picks the uplink for each new flow and hears how dials went
+	udpIdle   time.Duration
+	reconnect bool // close download apps' outage connections on recovery
+
+	outageMu    sync.Mutex
+	outageFlows map[uint64]func() // closers of outage connections, by id
+	outageNext  uint64
+
+	statsMu sync.Mutex
+	stats   map[*netif.Adapter]*linkStats // per line; lines can appear while running
 
 	loops    atomic.Int64
 	loopOnce sync.Once
@@ -53,16 +59,28 @@ type Forwarder struct {
 	unknown   atomic.Int64     // flows whose owning process wasn't found
 }
 
-func New(ups []*netif.Adapter, bal *balance.Balancer, rules *balance.Rules, udpIdle time.Duration) *Forwarder {
-	f := &Forwarder{bal: bal, rules: rules, ruleFlows: map[string]int64{}, udpIdle: udpIdle, stats: map[*netif.Adapter]*linkStats{}, own: map[netip.Addr]bool{}}
-	for _, a := range ups {
-		f.stats[a] = &linkStats{}
-		f.own[a.IPv4.Addr()] = true
-	}
+// New makes the flow handler. reconnect enables closing download apps'
+// outage connections when a line comes back (CloseOutageFlows).
+func New(bal *balance.Balancer, rules *balance.Rules, udpIdle time.Duration, reconnect bool) *Forwarder {
+	f := &Forwarder{bal: bal, rules: rules, ruleFlows: map[string]int64{}, udpIdle: udpIdle, reconnect: reconnect,
+		stats: map[*netif.Adapter]*linkStats{}, outageFlows: map[uint64]func(){}}
 	if rules != nil && !rules.Empty() {
 		f.procs = procs.NewTable()
 	}
 	return f
+}
+
+// statsFor returns a's counters, creating them for a line that appeared
+// while running.
+func (f *Forwarder) statsFor(a *netif.Adapter) *linkStats {
+	f.statsMu.Lock()
+	defer f.statsMu.Unlock()
+	st := f.stats[a]
+	if st == nil {
+		st = &linkStats{}
+		f.stats[a] = st
+	}
+	return st
 }
 
 // endpoints returns the flow's app-side source and real destination.
@@ -82,7 +100,7 @@ func endpoints(id stack.TransportEndpointID) (src, dst netip.AddrPort) {
 //     SSDP and NetBIOS broadcasts out of every adapter, including ours. Those
 //     mean nothing on the internet.
 func (f *Forwarder) accept(src, dst netip.AddrPort) bool {
-	if f.own[src.Addr()] {
+	if f.bal.IsUplinkIP(src.Addr()) {
 		f.loops.Add(1)
 		f.loopOnce.Do(func() {
 			fmt.Fprintf(os.Stderr, "ROUTING LOOP: a flow from our own uplink address %s (to %s) came back into the TUN. "+
@@ -161,11 +179,12 @@ func (f *Forwarder) tcp(c adapter.TCPConn) {
 	if !f.accept(src, dst) {
 		return
 	}
-	up := f.bal.PickFor(dst.Addr(), f.ruleFor(false, src))
+	rule := f.ruleFor(false, src)
+	up, duringOutage := f.bal.PickFlow(dst.Addr(), rule)
 	if up == nil {
 		return // no healthy uplink: closing sends a RST to the app
 	}
-	st := f.stats[up]
+	st := f.statsFor(up)
 	st.flows.Add(1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -178,6 +197,11 @@ func (f *Forwarder) tcp(c adapter.TCPConn) {
 	defer out.Close()
 	st.tcp.Add(1)
 	defer st.tcp.Add(-1)
+	// A download app's connection placed during an outage is closed when the
+	// line comes back, so the app reconnects over all lines (OnLineUp).
+	if duringOutage && rule.Kind == balance.RuleStickyExempt && f.reconnect {
+		defer f.trackOutageFlow(func() { c.Close(); out.Close() })()
+	}
 
 	// Copy both directions. When one side finishes sending, pass the
 	// half-close (FIN) on with CloseWrite so the other direction can finish.
@@ -202,7 +226,7 @@ func (f *Forwarder) udp(c adapter.UDPConn) {
 	if up == nil {
 		return
 	}
-	st := f.stats[up]
+	st := f.statsFor(up)
 	st.flows.Add(1)
 
 	// The netstack hands us one conn per (app src, dst) pair, and we give it
@@ -279,10 +303,43 @@ type Counters struct {
 
 // Counters returns a's current counters.
 func (f *Forwarder) Counters(a *netif.Adapter) Counters {
-	st := f.stats[a]
+	st := f.statsFor(a)
 	return Counters{Rx: st.rx.Load(), Tx: st.tx.Load(), TCP: st.tcp.Load(), UDP: st.udp.Load(), Flows: st.flows.Load()}
 }
 
 // Loops returns how many flows were dropped as routing loops. The startup
 // self-check compares it before and after dialing through every uplink.
 func (f *Forwarder) Loops() int64 { return f.loops.Load() }
+
+// trackOutageFlow remembers how to close a connection that a "balance every
+// connection" app opened while a line was DOWN. The returned func forgets it
+// again (the connection ended by itself).
+func (f *Forwarder) trackOutageFlow(closer func()) (untrack func()) {
+	f.outageMu.Lock()
+	f.outageNext++
+	id := f.outageNext
+	f.outageFlows[id] = closer
+	f.outageMu.Unlock()
+	return func() {
+		f.outageMu.Lock()
+		delete(f.outageFlows, id)
+		f.outageMu.Unlock()
+	}
+}
+
+// CloseOutageFlows closes the tracked outage connections and returns how
+// many. Download apps (Steam) then open new connections, which are balanced
+// over all lines; closing one mid-transfer only makes them retry that piece.
+func (f *Forwarder) CloseOutageFlows() int {
+	f.outageMu.Lock()
+	closers := make([]func(), 0, len(f.outageFlows))
+	for id, c := range f.outageFlows {
+		closers = append(closers, c)
+		delete(f.outageFlows, id)
+	}
+	f.outageMu.Unlock()
+	for _, c := range closers {
+		c()
+	}
+	return len(closers)
+}

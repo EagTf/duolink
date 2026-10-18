@@ -100,6 +100,35 @@ line UP; adapter events and dials can only make it DOWN or ask for a probe.
 UDP dials only report errors, because a connected UDP socket sends nothing
 and its success proves nothing.
 
+## Hot-plug and recovery after an outage
+
+`Balancer.applyAdapters` runs after every adapter event (`OnAdapterChange`),
+matching lines to adapters by LUID:
+
+```
+ same LUID, usable, new address or index → new line at the new address,
+                                            same weight, DOWN, probe kicked
+ LUID gone                                → line dropped (logged DOWN first)
+ disconnected / no address / no gateway   → line DOWN (Issue), as before
+ usable adapter with an unknown LUID      → new line, weight from the config
+                                            (weightFor), DOWN, probe kicked
+```
+
+The set of lines lives under the balancer's mutex; health loops are started
+per line (`startLoop`, own context, stopped when the line is replaced or
+dropped). The forwarder's loop guard asks `Balancer.IsUplinkIP`, its
+counters are created per line on first use, and the engine's stats come from
+`Balancer.Lines()`, so the window and tray menu show the current lines. Pins
+and "exclude" are resolved by name at each pick (`byName`, `primary`).
+
+A sticky entry created while a weighted line is DOWN is flagged
+`duringOutage`; when any line comes back UP (`check`), flagged entries are
+forgotten (`forgetOutageEntries`) and those destinations are balanced again.
+Flows from sticky-exempt apps placed during an outage (`PickFlow` reports
+it) are tracked by the forwarder; on `OnLineUp` the engine calls
+`CloseOutageFlows`, so those apps reconnect over all lines
+(`processes.reconnect_after_outage`).
+
 ## Stickiness
 
 `balancer.sticky` maps destination IP → (line, last new flow). On a new flow,

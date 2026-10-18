@@ -3,6 +3,28 @@
 Not released yet. Entries are by milestone; see
 [docs/milestones.md](docs/milestones.md) for test results.
 
+## Milestone 12: recovery, hot-plug, friendlier per-app rules
+
+- When a line comes back after an outage, the destinations that moved to
+  the other line during it are balanced over both lines again.
+- Lines follow the adapters while duolink runs: a new adapter (e.g. a new
+  Wi-Fi stick) is picked up with its configured weight, an adapter that
+  returns with a new address or interface index is used at the new address,
+  and a removed adapter is dropped. New and changed lines are probed before
+  they get traffic. No more "restart duolink to use it".
+- When a line comes back, connections that "balance every connection" apps
+  (Steam) opened during the outage are closed so they reconnect over all
+  lines; their downloads would otherwise stay on the surviving line, since
+  they keep reusing those connections. Setting
+  `processes.reconnect_after_outage` (on by default), also in Settings.
+- Pins and "never balance" follow a line whose adapter was replaced.
+- Unplugging a line's adapter counts as an outage until a new line takes its
+  place, so download apps are rebalanced when the adapter is plugged back in
+  too. A probe that finishes after its line was replaced is ignored.
+- Settings: per-app rules as a list with Browse… (pick the program's .exe),
+  a rule dropdown (pin to a connected line by name) and Add / update /
+  Remove.
+
 ## Milestone 11: settings in the window
 
 - Settings window (button in the status window, "Settings…" in the tray

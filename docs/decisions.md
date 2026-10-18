@@ -75,10 +75,33 @@ carry partial data and come in bursts. Coalescing the burst and comparing
 each line with its startup state (`netif.Issue`) is simpler and can't miss
 a change.
 
-**A changed address or interface index is reported, not followed.** Sockets
-are bound to the address seen at startup. Following changes live is part of
-the hot-plugging idea; until then the line stays DOWN and the log says to
-restart.
+**Lines follow the adapters while running (hot-plug).** Adapters are tracked
+by LUID. A line whose adapter comes back at a new address or interface index
+is replaced by a fresh line at the new address (same weight), rather than
+updated in place: sockets bind to address and index, and an immutable
+adapter per line means no locking on the dial path. A removed adapter's
+line is dropped instead of kept as a dead row; if the adapter returns it's
+a new line. New usable adapters get their weight from the config (1 with no
+weights; 0 if weights are set and none names it). Every new or replaced
+line starts DOWN and needs one good probe, so a half-connected adapter never
+gets flows. Pins and "exclude" are resolved by name at each pick, so they
+follow a replaced line.
+
+**After an outage, destinations that moved are rebalanced.** A sticky entry
+created while a line was DOWN is marked; when a line comes back UP those
+entries are forgotten, so the next connection to them is balanced over all
+lines again. Without this, a long download that reconnects to the same
+servers kept them on the surviving line for good (seen in the milestone 7
+test). Entries from before the outage keep their line, so most sites still
+see one IP. That alone didn't help Steam, which is sticky-exempt and keeps
+reusing the connections it opened during the outage, so for "balance every
+connection" apps those connections are also closed when a line comes back
+(they retry the piece in flight and reconnect over all lines). Games, voice
+and other apps keep theirs: cutting them would hurt. Optional, on by default.
+
+**Per-app rules are edited as a list, one rule per program.** A file picker
+and a line dropdown replace typed `exe = line` text; a program can only
+have one rule, so "listed twice" can't happen from the window.
 
 **Existing flows never move.** A TCP connection's source IP is fixed;
 moving it to another line would break it. Only new flows react to health
@@ -88,9 +111,8 @@ and weights.
 and game servers seeing one public IP, which avoids session and anti-cheat
 trouble. Big downloads still spread because CDNs use several IPs (verified
 with Steam). A destination moved by failover stays on its new line, since
-the point is IP consistency. Under review: with a sliding timer this keeps a
-long download on one line after the failed line recovers (see
-docs/action_items.md).
+the point is IP consistency, but only until a line comes back (see "After
+an outage, destinations that moved are rebalanced" above).
 
 **Per-app rules by exe file name, looked up per flow.** Mapping the app's
 socket (198.18.0.1:port) through the owner tables is exact and needs no

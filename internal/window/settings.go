@@ -29,6 +29,11 @@ const (
 	idCancel
 	idDefaults
 	idStickyOn
+	idRuleList
+	idRuleAdd
+	idRuleRemove
+	idBrowse
+	idReconnect
 )
 
 // settingsUI holds the settings window's controls. It lives on the window
@@ -42,7 +47,10 @@ type settingsUI struct {
 	stickyOn, stickyMin                     uintptr
 	interval, downInterval, timeout, misses uintptr
 	targets, udpIdle                        uintptr
-	exempt, exclude, pin                    uintptr
+	ruleList, ruleExe, ruleKind             uintptr // per-app rules: list, program field, rule dropdown
+	reconnect                               uintptr // "reconnect download apps after an outage" checkbox
+	rules                                   []ruleRow
+	options                                 []ruleOption
 	message, save                           uintptr
 	messageColor                            uintptr
 }
@@ -89,7 +97,7 @@ func (w *Window) createSettings() error {
 
 	dpi, _, _ := pGetDpiForSystem.Call()
 	s := func(v int) uintptr { return uintptr(v * int(dpi) / 96) }
-	const clientW, clientH = 608, 636
+	const clientW, clientH = 608, 676
 	style := uintptr(wsCaption | wsSysMenu | wsMinimizeBox)
 	r := rect{0, 0, int32(s(clientW)), int32(s(clientH))}
 	pAdjustWindowRectEx.Call(ptr(&r), style, 0, 0)
@@ -118,9 +126,6 @@ func (w *Window) createSettings() error {
 	}
 	text := func(x, y, cw int) uintptr {
 		return ctl("EDIT", "", esAutoHScroll|wsTabStop, wsExClientEdge, x, y, cw, 22, 0, ui)
-	}
-	multi := func(x, y int) uintptr {
-		return ctl("EDIT", "", esMultiline|esAutoVScroll|esWantReturn|wsVScroll|wsTabStop, wsExClientEdge, x, y, 184, 104, 0, mono)
 	}
 
 	heading("Lines", 12)
@@ -159,18 +164,24 @@ func (w *Window) createSettings() error {
 	u.udpIdle = number(176, 340)
 	label("seconds without packets", 230, 343, 200, 18)
 
-	heading("Per-app rules: one program per line, like steam.exe", 374)
-	label("Balance every connection", 16, 396, 184, 16)
-	label("Never balance (Windows' line)", 212, 396, 184, 16)
-	label("Pin to a line: game.exe = eth", 408, 396, 184, 16)
-	u.exempt = multi(16, 414)
-	u.exclude = multi(212, 414)
-	u.pin = multi(408, 414)
+	heading("Per-app rules", 374)
+	u.ruleList = ctl("LISTBOX", "", lbsNotify|wsVScroll|wsBorder|wsTabStop, 0, 16, 394, 456, 96, idRuleList, mono)
+	ctl("BUTTON", "Remove", bsPushButton|wsTabStop, 0, 480, 394, 112, 28, idRuleRemove, ui)
+	label("Program", 16, 501, 54, 18)
+	u.ruleExe = text(72, 498, 170)
+	ctl("BUTTON", "Browse…", bsPushButton|wsTabStop, 0, 248, 497, 76, 26, idBrowse, ui)
+	// A drop-down list's height includes the opened list.
+	u.ruleKind = ctl("COMBOBOX", "", cbsDropDownList|wsVScroll|wsTabStop, 0, 330, 498, 170, 220, 0, ui)
+	ctl("BUTTON", "Add / update", bsPushButton|wsTabStop, 0, 506, 497, 86, 26, idRuleAdd, ui)
+	label("Pick a program with Browse… (or type its name, like game.exe), choose what duolink does with "+
+		"its connections, then Add / update. Select a rule to change or remove it.", 16, 528, 576, 32)
+	u.reconnect = ctl("BUTTON", "After an outage, reconnect \"Balance every connection\" apps (like Steam) on all lines",
+		bsAutoCheckBox|wsTabStop, 0, 16, 562, 576, 22, idReconnect, ui)
 
-	u.message = ctl("STATIC", "", 0, 0, 16, 528, 576, 54, 0, ui)
-	ctl("BUTTON", "Reset to defaults", bsPushButton|wsTabStop, 0, 16, 594, 130, 30, idDefaults, ui)
-	ctl("BUTTON", "Cancel", bsPushButton|wsTabStop, 0, 346, 594, 110, 30, idCancel, ui)
-	u.save = ctl("BUTTON", "Save and apply", bsPushButton|wsTabStop, 0, 464, 594, 128, 30, idSave, ui)
+	u.message = ctl("STATIC", "", 0, 0, 16, 592, 576, 40, 0, ui)
+	ctl("BUTTON", "Reset to defaults", bsPushButton|wsTabStop, 0, 16, 638, 130, 30, idDefaults, ui)
+	ctl("BUTTON", "Cancel", bsPushButton|wsTabStop, 0, 346, 638, 110, 30, idCancel, ui)
+	u.save = ctl("BUTTON", "Save and apply", bsPushButton|wsTabStop, 0, 464, 638, 128, 30, idSave, ui)
 	w.set = u
 	return nil
 }
@@ -193,13 +204,20 @@ func (w *Window) fillSettings(f form) {
 		check = 1
 	}
 	pSendMessageW.Call(u.stickyOn, bmSetCheck, check, 0)
+	check = 0
+	if f.Reconnect {
+		check = 1
+	}
+	pSendMessageW.Call(u.reconnect, bmSetCheck, check, 0)
 	for h, v := range map[uintptr]string{
 		u.stickyMin: f.StickyMin, u.interval: f.Interval, u.downInterval: f.DownInterval,
 		u.timeout: f.Timeout, u.misses: f.Failures, u.targets: f.Targets, u.udpIdle: f.UDPIdle,
-		u.exempt: f.Exempt, u.exclude: f.Exclude, u.pin: f.Pin,
 	} {
 		pSetWindowTextW.Call(h, ptr(utf16(v)))
 	}
+	u.rules = f.Rules
+	w.showRules(-1)
+	pSetWindowTextW.Call(u.ruleExe, ptr(utf16("")))
 }
 
 func (w *Window) readSettings() form {
@@ -210,6 +228,8 @@ func (w *Window) readSettings() form {
 	}
 	on, _, _ := pSendMessageW.Call(u.stickyOn, bmGetCheck, 0, 0)
 	f.StickyOn = on == 1
+	on, _, _ = pSendMessageW.Call(u.reconnect, bmGetCheck, 0, 0)
+	f.Reconnect = on == 1
 	f.StickyMin = getText(u.stickyMin)
 	f.Interval = getText(u.interval)
 	f.DownInterval = getText(u.downInterval)
@@ -217,9 +237,7 @@ func (w *Window) readSettings() form {
 	f.Failures = getText(u.misses)
 	f.Targets = getText(u.targets)
 	f.UDPIdle = getText(u.udpIdle)
-	f.Exempt = getText(u.exempt)
-	f.Exclude = getText(u.exclude)
-	f.Pin = getText(u.pin)
+	f.Rules = u.rules
 	return f
 }
 
@@ -243,10 +261,15 @@ func (w *Window) settingsProc(hwnd, message, wParam, lParam uintptr) uintptr {
 			return b
 		}
 	case wmCommand:
-		if wParam>>16 != bnClicked {
+		id, code := wParam&0xFFFF, wParam>>16
+		if id == idRuleList && code == lbnSelChange {
+			w.editSelectedRule()
+			return 0
+		}
+		if code != bnClicked {
 			break
 		}
-		switch wParam & 0xFFFF {
+		switch id {
 		case idCancel:
 			pShowWindow.Call(hwnd, swHide)
 		case idDefaults:
@@ -254,11 +277,119 @@ func (w *Window) settingsProc(hwnd, message, wParam, lParam uintptr) uintptr {
 			w.setMessage("Defaults filled in. Nothing is saved until you click Save and apply.", darkGreen)
 		case idSave:
 			w.saveSettings()
+		case idBrowse:
+			w.browseProgram()
+		case idRuleAdd:
+			w.addRule()
+		case idRuleRemove:
+			w.removeRule()
 		}
 		return 0
 	}
 	r, _, _ := pDefWindowProcW.Call(hwnd, message, wParam, lParam)
 	return r
+}
+
+// showRules refills the rule list and the rule dropdown, and selects the
+// rule at sel (-1 = none; the dropdown then shows its first choice).
+func (w *Window) showRules(sel int) {
+	u := w.set
+	pSendMessageW.Call(u.ruleList, lbResetContent, 0, 0)
+	for _, r := range u.rules {
+		pSendMessageW.Call(u.ruleList, lbAddString, 0, ptr(utf16(r.label())))
+	}
+	u.options = ruleOptions(u.lines, u.rules)
+	pSendMessageW.Call(u.ruleKind, cbResetContent, 0, 0)
+	for _, o := range u.options {
+		pSendMessageW.Call(u.ruleKind, cbAddString, 0, ptr(utf16(o.Label)))
+	}
+	pSendMessageW.Call(u.ruleList, lbSetCurSel, uintptr(sel), 0) // -1 clears
+	idx := 0
+	if sel >= 0 && sel < len(u.rules) {
+		idx = optionIndex(u.options, u.rules[sel])
+	}
+	pSendMessageW.Call(u.ruleKind, cbSetCurSel, uintptr(idx), 0)
+}
+
+// editSelectedRule loads the selected rule into the program field and the
+// dropdown, ready to change.
+func (w *Window) editSelectedRule() {
+	u := w.set
+	sel, _, _ := pSendMessageW.Call(u.ruleList, lbGetCurSel, 0, 0)
+	i := int(int32(sel))
+	if i < 0 || i >= len(u.rules) {
+		return
+	}
+	pSetWindowTextW.Call(u.ruleExe, ptr(utf16(u.rules[i].Exe)))
+	pSendMessageW.Call(u.ruleKind, cbSetCurSel, uintptr(optionIndex(u.options, u.rules[i])), 0)
+}
+
+// addRule adds the program field + dropdown as a rule, or updates the
+// program's existing rule. Nothing is saved until Save and apply.
+func (w *Window) addRule() {
+	u := w.set
+	exe, err := exeName(getText(u.ruleExe))
+	if err != nil {
+		w.setMessage(err.Error(), darkRed)
+		return
+	}
+	sel, _, _ := pSendMessageW.Call(u.ruleKind, cbGetCurSel, 0, 0)
+	i := int(int32(sel))
+	if i < 0 || i >= len(u.options) {
+		i = 0
+	}
+	o := u.options[i]
+	var at int
+	u.rules, at = upsertRule(u.rules, ruleRow{Exe: exe, Kind: o.Kind, Line: o.Line})
+	w.showRules(at)
+	pSetWindowTextW.Call(u.ruleExe, ptr(utf16(exe)))
+	w.setMessage("Rule for "+exe+" set. Click Save and apply to use it.", darkGreen)
+}
+
+func (w *Window) removeRule() {
+	u := w.set
+	sel, _, _ := pSendMessageW.Call(u.ruleList, lbGetCurSel, 0, 0)
+	i := int(int32(sel))
+	if i < 0 || i >= len(u.rules) {
+		w.setMessage("Select a rule in the list first.", darkRed)
+		return
+	}
+	exe := u.rules[i].Exe
+	u.rules = append(u.rules[:i:i], u.rules[i+1:]...)
+	w.showRules(-1)
+	pSetWindowTextW.Call(u.ruleExe, ptr(utf16("")))
+	w.setMessage("Rule for "+exe+" removed. Click Save and apply to use the change.", darkGreen)
+}
+
+// browseProgram shows Windows' standard Open dialog (GetOpenFileNameW) to
+// pick a program, and puts its file name in the program field. Rules match
+// the exe's file name, so the folder doesn't matter.
+func (w *Window) browseProgram() {
+	file := make([]uint16, 1024)
+	// The filter is pairs of NUL-terminated strings, ended by an extra NUL.
+	filter := append(windows.StringToUTF16("Programs (*.exe)"), windows.StringToUTF16("*.exe")...)
+	filter = append(filter, windows.StringToUTF16("All files")...)
+	filter = append(filter, windows.StringToUTF16("*.*")...)
+	filter = append(filter, 0)
+	ofn := openFileName{
+		owner:   w.set.hwnd,
+		filter:  &filter[0],
+		file:    &file[0],
+		maxFile: uint32(len(file)),
+		title:   utf16("Pick a program"),
+		flags:   ofnFileMustExist | ofnPathMustExist | ofnNoChangeDir | ofnHideReadOnly | ofnExplorer,
+	}
+	ofn.structSize = uint32(unsafe.Sizeof(ofn))
+	if ok, _, _ := pGetOpenFileNameW.Call(ptr(&ofn)); ok == 0 {
+		return // cancelled
+	}
+	path := windows.UTF16ToString(file)
+	if exe, err := exeName(path); err == nil {
+		pSetWindowTextW.Call(w.set.ruleExe, ptr(utf16(exe)))
+		w.setMessage("Now choose what duolink does with "+exe+" and click Add / update.", darkGreen)
+	} else {
+		w.setMessage(err.Error(), darkRed)
+	}
 }
 
 // saveSettings checks the form here (fast), then hands the config to the

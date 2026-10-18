@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"time"
+
+	"github.com/eagtf/duolink/internal/netif"
 )
 
 // LineStats is one uplink's state and throughput over the last interval.
@@ -39,7 +41,9 @@ func (s Stats) AnyDown() bool {
 // sampleStats computes throughput from the byte counters every StatsEvery
 // and hands the sample to OnStats, until ctx ends.
 func (e *Engine) sampleStats(ctx context.Context) {
-	prev := map[string][2]int64{}
+	// Keyed by the line itself, not its name: a line replaced after a move
+	// keeps its name but starts its counters from zero.
+	prev := map[*netif.Adapter][2]int64{}
 	every := e.opts.StatsEvery
 	t := time.NewTicker(every)
 	defer t.Stop()
@@ -51,14 +55,17 @@ func (e *Engine) sampleStats(ctx context.Context) {
 		}
 		s := Stats{Time: time.Now(), Rules: e.fwd.RuleSummary()}
 		sticky := e.bal.StickyCount()
-		for _, a := range e.ups {
+		seen := map[*netif.Adapter][2]int64{}
+		// The current lines: they change when adapters come, go or move.
+		for _, line := range e.bal.Lines() {
+			a := line.Adapter
 			c := e.fwd.Counters(a)
-			p := prev[a.Name]
-			prev[a.Name] = [2]int64{c.Rx, c.Tx}
+			p := prev[a]
+			seen[a] = [2]int64{c.Rx, c.Tx}
 			l := LineStats{
 				Name:     a.Name,
 				State:    "UP",
-				Weight:   e.weights[a],
+				Weight:   line.Weight,
 				DownMbps: mbit(c.Rx-p[0], every),
 				UpMbps:   mbit(c.Tx-p[1], every),
 				TCP:      c.TCP,
@@ -69,13 +76,14 @@ func (e *Engine) sampleStats(ctx context.Context) {
 			switch {
 			case l.Weight == 0:
 				l.State = "off"
-			case !e.bal.Healthy(a):
+			case !line.Healthy:
 				l.State = "DOWN"
 			}
 			s.DownMbps += l.DownMbps
 			s.UpMbps += l.UpMbps
 			s.Lines = append(s.Lines, l)
 		}
+		prev = seen // forget lines that are gone
 		e.opts.OnStats(s)
 	}
 }

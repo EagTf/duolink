@@ -25,7 +25,7 @@ func rulesRig(t *testing.T, pc config.ProcessConfig) (*Balancer, *Rules, *netif.
 }
 
 func TestResolveRules(t *testing.T) {
-	_, r, eth, wifi := rulesRig(t, config.ProcessConfig{
+	_, r, _, _ := rulesRig(t, config.ProcessConfig{
 		StickyExempt: []string{"Steam.exe"},
 		Pin:          map[string]string{"Game.EXE": "wifi"},
 		Exclude:      []string{"backup.exe"},
@@ -33,11 +33,11 @@ func TestResolveRules(t *testing.T) {
 	if got := r.ForExe("steam.exe"); got.Kind != RuleStickyExempt {
 		t.Errorf("steam.exe: %+v", got)
 	}
-	if got := r.ForExe("game.exe"); got.Kind != RulePin || got.Line != wifi {
+	if got := r.ForExe("game.exe"); got.Kind != RulePin || got.Pin != "wifi" {
 		t.Errorf("game.exe should be pinned to Wi-Fi (names are case-insensitive): %+v", got)
 	}
-	if got := r.ForExe("backup.exe"); got.Kind != RuleExclude || got.Line != eth {
-		t.Errorf("backup.exe should be excluded → Ethernet (lowest metric): %+v", got)
+	if got := r.ForExe("backup.exe"); got.Kind != RuleExclude {
+		t.Errorf("backup.exe should be excluded: %+v", got)
 	}
 	if got := r.ForExe("chrome.exe"); got.Kind != RuleNone {
 		t.Errorf("unlisted exe got a rule: %+v", got)
@@ -64,8 +64,8 @@ func TestResolveRulesErrors(t *testing.T) {
 	// Exclude's primary line skips weight-0 lines even if their metric is lower.
 	eth.Metric, wifi.Metric = 50, 10
 	r, err := ResolveRules(config.ProcessConfig{Exclude: []string{"a.exe"}}, ups, weights)
-	if err != nil || r.ForExe("a.exe").Line != eth {
-		t.Errorf("primary should be the weighted line: %+v %v", r.ForExe("a.exe"), err)
+	if err != nil || !strings.Contains(r.Describe(), "a.exe excluded → Ethernet") {
+		t.Errorf("primary should be the weighted line: %q %v", r.Describe(), err)
 	}
 }
 

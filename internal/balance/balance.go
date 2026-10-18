@@ -40,6 +40,10 @@ type uplink struct {
 	// the line's health loop (check) touches it.
 	probeFails int
 
+	// cancel stops this line's health loop when the line is replaced (its
+	// adapter came back at a new address). Set by startLoop.
+	cancel context.CancelFunc
+
 	mu       sync.Mutex       // guards the fields below
 	failDsts []netip.AddrPort // consecutive failed dials, one per destination IP
 	issue    string           // adapter problem seen by the watcher; "" = none
@@ -48,18 +52,30 @@ type uplink struct {
 type stickyEntry struct {
 	a    *netif.Adapter
 	last time.Time // last new flow to this destination
+	// duringOutage: the line was picked while another line was DOWN. Such
+	// entries are forgotten when a line comes back, so the destination is
+	// balanced over all lines again instead of staying on the survivor.
+	duringOutage bool
 }
 
 // Balancer assigns each new flow to an uplink. Once assigned, a flow stays on
 // its uplink for its whole life; only new flows see weight or health changes.
 type Balancer struct {
-	health config.HealthConfig
+	health     config.HealthConfig
+	weightSpec map[string]int // configured weights, for lines that appear later
 
 	mu        sync.Mutex
-	links     []*uplink
+	links     []*uplink // the current lines; changes when adapters come, go or move
+	runCtx    context.Context
 	stickyTTL time.Duration // 0 = stickiness off
 	sticky    map[netip.Addr]*stickyEntry
 	allDown   bool // for printing the fallback warning once per outage
+	// missing counts weighted lines whose adapter was removed (unplugged)
+	// and not yet replaced by a new line. Until then it's an outage like a
+	// DOWN line, so flows placed meanwhile are rebalanced when one comes up.
+	missing int
+
+	onLineUp func(*netif.Adapter) // set by OnLineUp
 
 	// Replaceable in tests.
 	now   func() time.Time
@@ -69,10 +85,11 @@ type Balancer struct {
 
 func New(ups []*netif.Adapter, weights map[*netif.Adapter]int, cfg *config.Config) *Balancer {
 	b := &Balancer{
-		health:    cfg.Health,
-		stickyTTL: cfg.StickyTTL(),
-		sticky:    map[netip.Addr]*stickyEntry{},
-		now:       time.Now,
+		health:     cfg.Health,
+		weightSpec: cfg.Weights,
+		stickyTTL:  cfg.StickyTTL(),
+		sticky:     map[netip.Addr]*stickyEntry{},
+		now:        time.Now,
 		logf: func(format string, args ...any) {
 			fmt.Printf(ts()+" "+format+"\n", args...)
 		},
@@ -101,41 +118,56 @@ func (b *Balancer) Pick(dst netip.Addr) *netif.Adapter { return b.PickFor(dst, R
 //     usable), so the remote side sees one public IP. Everything else is
 //     balanced.
 func (b *Balancer) PickFor(dst netip.Addr, r Rule) *netif.Adapter {
+	a, _ := b.PickFlow(dst, r)
+	return a
+}
+
+// PickFlow is PickFor that also reports whether a weighted line was DOWN
+// when the flow was placed: such a flow is on the surviving line only because
+// of the outage (see OnLineUp).
+func (b *Balancer) PickFlow(dst netip.Addr, r Rule) (_ *netif.Adapter, duringOutage bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	cands := b.candidates()
+	cands, outage := b.candidates()
 	if len(cands) == 0 {
-		return nil
+		return nil, outage
 	}
 	switch r.Kind {
 	case RulePin, RuleExclude:
-		if contains(cands, r.Line) {
-			return r.Line
+		// Resolved now, not at startup, so a pin follows a line whose
+		// adapter was replaced or came back at a new address.
+		target := b.primary()
+		if r.Kind == RulePin {
+			target = b.byName(r.Pin)
 		}
-		return wrr(cands)
+		if target != nil && contains(cands, target) {
+			return target, outage
+		}
+		return wrr(cands), outage
 	case RuleStickyExempt:
-		return wrr(cands)
+		return wrr(cands), outage
 	}
 	now := b.now()
 	if b.stickyTTL > 0 {
 		if e := b.sticky[dst]; e != nil && now.Sub(e.last) < b.stickyTTL && contains(cands, e.a) {
 			e.last = now
-			return e.a
+			return e.a, outage
 		}
 	}
 	a := wrr(cands)
 	if b.stickyTTL > 0 {
-		b.sticky[dst] = &stickyEntry{a: a, last: now}
+		b.sticky[dst] = &stickyEntry{a: a, last: now, duringOutage: outage}
 	}
-	return a
+	return a, outage
 }
 
-// candidates returns the uplinks that may get new flows: weighted and healthy.
-// If every uplink looks down, all weighted ones are used anyway. More likely
-// the probe targets are blocked than that every line is dead, and refusing all
-// flows would be worse. Caller holds b.mu.
-func (b *Balancer) candidates() []*uplink {
-	var cands, weighted []*uplink
+// candidates returns the uplinks that may get new flows: weighted and
+// healthy. outage reports that some weighted line is missing from them
+// (DOWN). If every uplink looks down, all weighted ones are used anyway. More
+// likely the probe targets are blocked than that every line is dead, and
+// refusing all flows would be worse. Caller holds b.mu.
+func (b *Balancer) candidates() (cands []*uplink, outage bool) {
+	var weighted []*uplink
 	for _, l := range b.links {
 		if l.weight > 0 {
 			weighted = append(weighted, l)
@@ -146,13 +178,59 @@ func (b *Balancer) candidates() []*uplink {
 	}
 	if len(cands) > 0 {
 		b.allDown = false
-		return cands
+		return cands, len(cands) < len(weighted) || b.missing > 0
 	}
 	if !b.allDown && len(weighted) > 0 {
 		b.allDown = true
 		b.logf("every uplink is DOWN; spreading flows over all of them anyway")
 	}
-	return weighted
+	return weighted, true
+}
+
+// byName finds the weighted line a pin names ("eth" → Ethernet), matched the
+// same way as in the config. Caller holds b.mu.
+func (b *Balancer) byName(key string) *netif.Adapter {
+	var ads []*netif.Adapter
+	for _, l := range b.links {
+		if l.weight > 0 {
+			ads = append(ads, l.a)
+		}
+	}
+	a, err := netif.Find(ads, key)
+	if err != nil {
+		return nil
+	}
+	return a
+}
+
+// primary is the weighted line with the lowest interface metric: the one
+// Windows itself would use. "exclude" rules stay on it. Caller holds b.mu.
+func (b *Balancer) primary() *netif.Adapter {
+	var p *netif.Adapter
+	for _, l := range b.links {
+		if l.weight > 0 && (p == nil || l.a.Metric < p.Metric) {
+			p = l.a
+		}
+	}
+	return p
+}
+
+// forgetOutageEntries drops sticky entries made while a line was DOWN, so
+// their destinations are balanced over all lines again. Called when a line
+// comes back. Entries from before the outage keep their line.
+func (b *Balancer) forgetOutageEntries() {
+	b.mu.Lock()
+	n := 0
+	for ip, e := range b.sticky {
+		if e.duringOutage {
+			delete(b.sticky, ip)
+			n++
+		}
+	}
+	b.mu.Unlock()
+	if n > 0 {
+		b.logf("rebalancing %d destinations that moved during the outage", n)
+	}
 }
 
 // wrr is smooth weighted round-robin (as in nginx): every candidate's current
@@ -206,6 +284,11 @@ func (b *Balancer) expireSticky() {
 	}
 }
 
+// OnLineUp calls f whenever a line comes (back) UP: after an outage, or a new
+// or moved line's first good probe. It runs on that line's health loop. Call
+// it before Run.
+func (b *Balancer) OnLineUp(f func(a *netif.Adapter)) { b.onLineUp = f }
+
 // OnLog also hands every health and failover log line (DOWN, back UP, ...)
 // to f, e.g. for a window's event list. Call it before Run.
 func (b *Balancer) OnLog(f func(line string)) {
@@ -225,21 +308,66 @@ func (b *Balancer) link(a *netif.Adapter) *uplink {
 	return nil
 }
 
-// healthy reports the last health-check result for a.
-func (b *Balancer) Healthy(a *netif.Adapter) bool { return b.link(a).healthy.Load() }
+// Healthy reports the last health-check result for a (false for a line that
+// is gone).
+func (b *Balancer) Healthy(a *netif.Adapter) bool {
+	b.mu.Lock()
+	l := b.link(a)
+	b.mu.Unlock()
+	return l != nil && l.healthy.Load()
+}
 
-func (b *Balancer) SetHealthy(a *netif.Adapter, ok bool) { b.link(a).healthy.Store(ok) }
+func (b *Balancer) SetHealthy(a *netif.Adapter, ok bool) {
+	b.mu.Lock()
+	l := b.link(a)
+	b.mu.Unlock()
+	if l != nil {
+		l.healthy.Store(ok)
+	}
+}
+
+// Line is one current line, for display.
+type Line struct {
+	Adapter *netif.Adapter
+	Weight  int
+	Healthy bool
+}
+
+// Lines returns the current lines, in the order they were added.
+func (b *Balancer) Lines() []Line {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]Line, 0, len(b.links))
+	for _, l := range b.links {
+		out = append(out, Line{Adapter: l.a, Weight: l.weight, Healthy: l.healthy.Load()})
+	}
+	return out
+}
+
+// IsUplinkIP reports whether ip is one of the lines' own addresses. A flow
+// from such an address that arrives in the TUN is a routing loop.
+func (b *Balancer) IsUplinkIP(ip netip.Addr) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, l := range b.links {
+		if l.a.IPv4.Addr() == ip {
+			return true
+		}
+	}
+	return false
+}
 
 // Run starts the health checks and the sticky-table sweeper; both stop with ctx.
 // Flows already on a link that goes down are left alone: they either recover
 // or time out by themselves, and moving a TCP connection to another line
 // isn't possible.
 func (b *Balancer) Run(ctx context.Context) {
+	b.mu.Lock()
+	b.runCtx = ctx
 	for _, l := range b.links {
-		if l.weight > 0 {
-			go b.healthLoop(ctx, l)
-		}
+		b.startLoop(l)
 	}
+	b.mu.Unlock()
 	if b.stickyTTL > 0 {
 		go func() {
 			t := time.NewTicker(time.Minute)
@@ -254,6 +382,18 @@ func (b *Balancer) Run(ctx context.Context) {
 			}
 		}()
 	}
+}
+
+// startLoop starts l's health loop, if l is weighted and Run has started.
+// The loop gets its own context, so a replaced line's loop can be stopped
+// alone. Caller holds b.mu.
+func (b *Balancer) startLoop(l *uplink) {
+	if b.runCtx == nil || l.weight == 0 {
+		return
+	}
+	ctx, cancel := context.WithCancel(b.runCtx)
+	l.cancel = cancel
+	go b.healthLoop(ctx, l)
 }
 
 // healthLoop probes l on its interval, or at once when something kicks it
@@ -286,8 +426,8 @@ func (b *Balancer) healthLoop(ctx context.Context, l *uplink) {
 // failure is enough there; a disconnected adapter never waits for a probe.
 func (b *Balancer) check(ctx context.Context, l *uplink, why string) {
 	err := b.probe(ctx, l.a)
-	if ctx.Err() != nil {
-		return
+	if ctx.Err() != nil || !b.isLine(l) {
+		return // stopped, or replaced while probing: the result is stale
 	}
 	if err != nil && why == "" && l.healthy.Load() {
 		l.probeFails++
@@ -311,11 +451,22 @@ func (b *Balancer) check(ctx context.Context, l *uplink, why string) {
 	switch {
 	case !l.healthy.Swap(true):
 		b.logf("%s is back UP", l.a.Name)
+		b.forgetOutageEntries()
+		if f := b.onLineUp; f != nil {
+			f(l.a)
+		}
 	case why != "":
 		b.logf("%s: %s, but the probe succeeded: stays UP", l.a.Name, why)
 	case missed > 0:
 		b.logf("%s: probe succeeded again: stays UP", l.a.Name)
 	}
+}
+
+// isLine reports whether l is still one of the current lines.
+func (b *Balancer) isLine(l *uplink) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Contains(b.links, l)
 }
 
 // setDown marks l DOWN and logs why, if it was UP.
@@ -364,7 +515,9 @@ func dialOutcome(err error) int {
 // Several failures to the same IP count once, so retries to one dead server
 // never trigger a probe.
 func (b *Balancer) NoteDial(a *netif.Adapter, dst netip.AddrPort, err error) {
+	b.mu.Lock()
 	l := b.link(a)
+	b.mu.Unlock()
 	if l == nil {
 		return
 	}
@@ -419,19 +572,114 @@ func (b *Balancer) setAdapterIssue(l *uplink, issue string) {
 	}
 }
 
-// OnAdapterChange re-reads the adapters and updates every weighted line.
-// Called by netif.Watch after Windows reports a change.
+// OnAdapterChange re-reads the adapters and updates the lines. Called by
+// netif.Watch after Windows reports a change.
 func (b *Balancer) OnAdapterChange() {
 	all, err := netif.List()
 	if err != nil {
 		b.logf("could not re-read adapters after a change: %v", err)
 		return
 	}
+	b.applyAdapters(all)
+}
+
+// applyAdapters brings the lines in line with the adapters Windows has now
+// (hot-plugging). Adapters are matched by LUID, which stays the same while
+// an adapter exists:
+//   - same adapter at a new address or interface index (new DHCP lease, USB
+//     adapter plugged back in): replaced by a line at the new address, which
+//     keeps the weight and starts DOWN until a probe succeeds;
+//   - adapter removed: dropped; its flows are gone anyway, and if it comes
+//     back it's picked up as a new line;
+//   - disconnected, no address or no gateway: DOWN, as before;
+//   - a usable adapter that isn't a line yet (a new Wi-Fi adapter): added with
+//     its weight from the config, DOWN until a probe succeeds.
+//
+// Flows already on a replaced or dropped line are left alone; their sockets
+// were bound to an address that is gone, so they end by themselves.
+func (b *Balancer) applyAdapters(all []*netif.Adapter) {
+	ups := netif.Uplinks(all)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	known := map[uint64]bool{}
+	var lines []*uplink
 	for _, l := range b.links {
+		cur := netif.FindByLUID(all, l.a.LUID)
+		known[l.a.LUID] = true
+		switch {
+		case cur == nil:
+			b.setDown(l, "adapter removed")
+			b.logf("%s: adapter removed; no longer a line", l.a.Name)
+			l.stop()
+			if l.weight > 0 {
+				b.missing++
+			}
+			continue
+		case netif.Moved(l.a, cur):
+			nl := newUplink(cur, l.weight)
+			probing := "; probing it"
+			if l.weight == 0 {
+				probing = "" // unused line: no health loop
+			}
+			b.logf("%s: now at %s, index %d (was %s, index %d)%s",
+				cur.Name, cur.IPv4.Addr(), cur.Index, l.a.IPv4.Addr(), l.a.Index, probing)
+			l.stop()
+			lines = append(lines, nl)
+			b.startLoop(nl)
+			b.kickProbe(nl, "new address")
+			continue
+		}
+		lines = append(lines, l)
 		if l.weight > 0 {
-			b.setAdapterIssue(l, netif.Issue(l.a, netif.FindByLUID(all, l.a.LUID)))
+			b.setAdapterIssue(l, netif.Issue(l.a, cur))
 		}
 	}
+	for _, u := range ups {
+		if known[u.LUID] {
+			continue
+		}
+		w := weightFor(b.weightSpec, u, ups)
+		nl := newUplink(u, w)
+		lines = append(lines, nl)
+		if w == 0 {
+			b.logf("%s: new line, but its weight in the settings is 0, so it isn't used", u.Name)
+			continue
+		}
+		if b.missing > 0 {
+			b.missing-- // it takes the removed line's place
+		}
+		b.logf("%s: new line (weight %d); probing it", u.Name, w)
+		b.startLoop(nl)
+		b.kickProbe(nl, "new line")
+	}
+	b.links = lines
+}
+
+// newUplink is a line for a, DOWN until its first probe succeeds.
+func newUplink(a *netif.Adapter, weight int) *uplink {
+	return &uplink{a: a, weight: weight, kick: make(chan string, 1)}
+}
+
+// stop ends the line's health loop, if it has one.
+func (l *uplink) stop() {
+	if l.cancel != nil {
+		l.cancel()
+	}
+}
+
+// weightFor is the configured weight of a line that appears while running:
+// 1 with no weights configured, otherwise the weight whose name matches it
+// (matched among all current lines, like at startup), or 0 if none does.
+func weightFor(spec map[string]int, a *netif.Adapter, ups []*netif.Adapter) int {
+	if len(spec) == 0 {
+		return 1
+	}
+	for key, n := range spec {
+		if m, err := netif.Find(ups, key); err == nil && m == a {
+			return n
+		}
+	}
+	return 0
 }
 
 // Probe TCP-connects to all targets at once through a; the line is fine if
