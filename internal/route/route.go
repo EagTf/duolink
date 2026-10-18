@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-	"os/exec"
+
 	"strings"
 	"time"
 
 	"github.com/eagtf/duolink/internal/netif"
 	"golang.org/x/sys/windows"
+
+	"github.com/eagtf/duolink/internal/winexec"
 )
 
 // The TUN adapter gets a tiny /30 from 198.18.0.0/15, the range RFC 2544
@@ -38,7 +40,7 @@ var halfDefaults = []string{"0.0.0.0/1", "128.0.0.0/1"}
 // the system is visible and can be repeated or undone by hand.
 func netsh(args ...string) error {
 	fmt.Println("  + netsh", strings.Join(args, " "))
-	out, err := exec.Command("netsh", args...).CombinedOutput()
+	out, err := winexec.Command("netsh", args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("netsh %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -198,7 +200,7 @@ func dadName(s int32) string {
 func Dump(ip netip.Addr, tunIndex uint32) {
 	run := func(name string, args ...string) {
 		fmt.Printf("\n===== %s %s =====\n", name, strings.Join(args, " "))
-		out, err := exec.Command(name, args...).CombinedOutput()
+		out, err := winexec.Command(name, args...).CombinedOutput()
 		fmt.Print(string(out))
 		if err != nil {
 			fmt.Println("(exit:", err, ")")

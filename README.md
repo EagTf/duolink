@@ -51,7 +51,7 @@ there, not in the current directory or on PATH, and refuses to start without it.
 
 ## What duolink changes on your system, and how to undo it
 
-While `duolink run` is active:
+While duolink is running (`duolink run`, or the tray app not paused):
 
 1. A virtual network adapter named `duolink` (Wintun) with the address
    `198.18.0.1/30`, a range reserved for benchmarking that never appears on
@@ -65,22 +65,33 @@ duolink exits. Every command duolink runs is printed as it runs.
 
 To undo:
 
-- Normally: press **Ctrl+C**, close the window, or use `--for` (see below).
-  duolink removes the routes first, then the adapter.
+- Normally: press **Ctrl+C**, close the window, or use `--for` (see below);
+  in the tray, **Pause** or **Quit**. duolink removes the routes first, then
+  the adapter.
 - After a crash: run `duolink cleanup` as administrator.
-- Always works: **reboot**. Nothing duolink does survives a restart.
+- Always works: **reboot**. Nothing duolink does to routing survives a restart.
+
+Two things are only there if you ask for them, and stay until you remove them:
+
+- `duolinkw.exe` and `duolink.log` next to `duolink.exe`, when you use the
+  tray (delete them any time; `duolink tray` recreates the exe).
+- A Task Scheduler task named `duolink`, when you turn on "Start with
+  Windows" or run `duolink autostart on`. Remove it with
+  `duolink autostart off` (or the menu item, or Task Scheduler).
 
 Your routers' own networks (e.g. `192.168.1.0/24`) stay directly reachable
 while duolink runs, so router admin pages keep working.
 
 ## Usage
 
-All `run` and `cleanup` commands need an administrator terminal.
+`run`, `tray`, `cleanup` and `autostart on/off` need an administrator terminal.
 
 ```
 duolink list                 show adapters and which ones duolink will use, and why others are skipped
 duolink list --ip            also show each line's public IP (asks api.ipify.org through each adapter)
-duolink run                  start balancing; Ctrl+C stops and cleans up
+duolink tray                 run in the system tray, without a console window
+duolink autostart on         start the tray at every logon (elevated, no UAC prompt); off / status
+duolink run                  start balancing in this terminal; Ctrl+C stops and cleans up
 duolink run --for 2m         stop and clean up automatically after 2 minutes
 duolink run --weights eth=2,wifi=1
 duolink run --sticky-minutes 0
@@ -105,6 +116,29 @@ reachable and that there is no routing loop. Then it prints live stats every
 
 Adapter names in `--weights` match by unique prefix, ignoring case and
 punctuation: `eth` = Ethernet, `wifi` = Wi-Fi. Run `duolink list` to see the names.
+
+### Tray app
+
+`duolink tray` puts duolink in the notification area and returns your
+terminal at once. The icon is green while running, amber when a line is
+down, and grey when paused. Hover for the total speed; open the menu for
+each line's state and speed, and for:
+
+- **Pause / Start**: Pause restores normal routing; Start brings duolink
+  back and re-reads `duolink.json`, so you can change settings without
+  quitting. If starting fails (say Wi-Fi isn't connected yet), it keeps
+  retrying every 10 seconds.
+- **Start with Windows**: same as `duolink autostart on`.
+- **Open log**: `duolink.log`, which has everything `duolink run` would print.
+- **Quit**: cleans up, then exits.
+
+How it avoids a console window: Windows decides from a flag in the exe
+whether a program gets a console. `duolink tray` keeps a copy of itself,
+`duolinkw.exe`, with that flag set to "windowed", and runs the tray from
+it. After rebuilding duolink, run `duolink tray` once to refresh the copy.
+
+Only one duolink can run at a time: `duolink run` refuses while the tray is
+active, and the other way round.
 
 ## Configuration: duolink.json
 

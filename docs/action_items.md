@@ -13,6 +13,14 @@
 
 ## Known issues
 
+- After rebuilding, the logon task keeps running the old `duolinkw.exe` until
+  `duolink tray` (or `duolink autostart on`) is run once to refresh it.
+  The tray could notice a newer `duolink.exe` next to it and say so.
+- The tray shows a dialog when a second copy starts, but doesn't bring the
+  first one's menu up. Milestone 10's window could be shown instead.
+- `duolinkw.exe` is an unsigned exe written at runtime; some antivirus
+  products may look at it more closely than at `duolink.exe`. Not seen so far.
+
 - **Stickiness blocks rebalancing after a failover.** While a line is DOWN,
   its destinations move to the other line and stick there. The sticky timer
   restarts on every new flow, so a long download (Steam reconnecting to the

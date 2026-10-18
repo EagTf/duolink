@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/eagtf/duolink/internal/engine"
 	"github.com/eagtf/duolink/internal/netif"
 	"github.com/eagtf/duolink/internal/route"
 )
@@ -47,7 +48,7 @@ func cmdList(args []string) error {
 		fmt.Println("warning:", w)
 	}
 	if len(netif.WithGlobalIPv6(all)) > 0 {
-		printIPv6Warning(all)
+		engine.PrintIPv6Warning(all)
 	}
 	if *checkIP {
 		fmt.Println()

@@ -96,12 +96,33 @@ Tested:
 - Not reported yet: Steam `sticky-exempt` count during a download, pin
   fallback, exclude, config error messages, no-rules run.
 
+## Awaiting test
+
+### 9. System tray app
+Status: awaiting test.
+Delivered:
+- `internal/engine`: start/stop-able engine shared by `duolink run` and the
+  tray; PC-wide mutex (one engine at a time); undo in reverse on Stop or a
+  failed Start.
+- `duolink tray`: windowed copy `duolinkw.exe` (PE Subsystem = GUI) made
+  and started from the console exe; no console window, logs to duolink.log.
+- Tray: state icons (green / amber / grey), per-line speeds in menu and
+  tooltip, Pause/Start (with 10 s retry while starting fails), Start with
+  Windows, Open log, Quit with cleanup; single instance; UAC relaunch when
+  not elevated.
+- `duolink autostart on|off|status`: Task Scheduler logon task, highest
+  privileges, no battery or time limits.
+- Console tools started with `CREATE_NO_WINDOW` (no flashing windows).
+- Unit tests: PE patch (incl. replacing a running copy), task XML, icon
+  (Windows loads it), engine lifecycle (failed Start, undo order).
+Tested: (pending)
+
 ## Planned
 
 | # | Milestone | Status |
 |---|---|---|
 | 7 | Instant failover: mark a line DOWN as soon as its adapter disconnects, or probe at once after 2 failed dials to different destinations | done (partially tested) |
 | 8 | Per-process rules via `GetExtendedTcpTable` / `GetExtendedUdpTable` (flow's local port → PID → exe): `sticky_exempt` (default `["steam.exe"]`), `pin` (process → line, with fallback when that line is down), `exclude` (not balanced). Configured in duolink.json | done (partially tested) |
-| 9 | System tray app: `duolink tray`, no console, Start/Pause, speeds, Quit with cleanup, single instance, autostart via Task Scheduler with highest privileges | next |
-| 10 | Small window opened from the tray; X hides it to the tray, only Quit exits | planned |
+| 9 | System tray app: `duolink tray`, no console, Start/Pause, speeds, Quit with cleanup, single instance, autostart via Task Scheduler with highest privileges | awaiting test |
+| 10 | Small window opened from the tray; X hides it to the tray, only Quit exits | next |
 | later | Metered/phone lines with a data cap; hot-plugging uplinks; automatic weights from passive throughput measurement; IPv6 | ideas |

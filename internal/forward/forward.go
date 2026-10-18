@@ -115,8 +115,8 @@ func (f *Forwarder) ruleFor(udp bool, src netip.AddrPort) balance.Rule {
 	return r
 }
 
-// ruleSummary is the stats line for process rules, or "" if nothing to show.
-func (f *Forwarder) ruleSummary() string {
+// RuleSummary is the stats line for process rules, or "" if nothing to show.
+func (f *Forwarder) RuleSummary() string {
 	if f.procs == nil {
 		return ""
 	}
@@ -270,57 +270,19 @@ func closeWrite(c net.Conn) {
 	}
 }
 
-// PrintStats prints per-uplink throughput every interval until ctx ends.
-// Columns: health, weight, throughput over the last interval, active TCP/UDP
-// flows, flows assigned since start, and destinations stuck to this line.
-func (f *Forwarder) PrintStats(ctx context.Context, ups []*netif.Adapter, weights map[*netif.Adapter]int, bal *balance.Balancer, every time.Duration) {
-	prev := map[*netif.Adapter][2]int64{}
-	t := time.NewTicker(every)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-		var totRx, totTx float64
-		sticky := bal.StickyCount()
-		for i, a := range ups {
-			st := f.stats[a]
-			rx, tx := st.rx.Load(), st.tx.Load()
-			p := prev[a]
-			prev[a] = [2]int64{rx, tx}
-			down, up := mbit(rx-p[0], every), mbit(tx-p[1], every)
-			totRx += down
-			totTx += up
-			state := "UP"
-			switch {
-			case weights[a] == 0:
-				state = "off"
-			case !bal.Healthy(a):
-				state = "DOWN"
-			}
-			when := "        "
-			if i == 0 {
-				when = ts()
-			}
-			fmt.Printf("%s  %-12s %-4s w%-3d down %5.1f  up %5.1f Mbit/s  tcp %4d  udp %3d  flows %6d  sticky dsts %4d\n",
-				when, a.Name, state, weights[a], down, up, st.tcp.Load(), st.udp.Load(), st.flows.Load(), sticky[a])
-		}
-		fmt.Printf("          %-12s %-4s %-4s down %5.1f  up %5.1f Mbit/s\n", "total", "", "", totRx, totTx)
-		if s := f.ruleSummary(); s != "" {
-			fmt.Println("         ", s)
-		}
-		fmt.Println()
-	}
+// Counters is a snapshot of one uplink's counters since start.
+type Counters struct {
+	Rx, Tx   int64 // bytes received from / sent to the internet
+	TCP, UDP int64 // active flows
+	Flows    int64 // flows ever assigned
 }
 
-func mbit(bytes int64, d time.Duration) float64 {
-	return float64(bytes) * 8 / d.Seconds() / 1e6
+// Counters returns a's current counters.
+func (f *Forwarder) Counters(a *netif.Adapter) Counters {
+	st := f.stats[a]
+	return Counters{Rx: st.rx.Load(), Tx: st.tx.Load(), TCP: st.tcp.Load(), UDP: st.udp.Load(), Flows: st.flows.Load()}
 }
 
 // Loops returns how many flows were dropped as routing loops. The startup
 // self-check compares it before and after dialing through every uplink.
 func (f *Forwarder) Loops() int64 { return f.loops.Load() }
-
-func ts() string { return time.Now().Format("15:04:05") }

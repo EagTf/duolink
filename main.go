@@ -20,6 +20,9 @@ const usage = `usage:
                                             routing table before cleaning up
   duolink config [--init] [run flags]     print the effective config (defaults < duolink.json < flags)
                                           --init: write the defaults to duolink.json
+  duolink tray [--config file]            run in the system tray, no console (admin);
+                                          returns at once, logs to duolink.log
+  duolink autostart on|off|status         start the tray at logon, elevated (admin for on/off)
   duolink cleanup                         remove routes left behind by a crash (admin)
   duolink debug route <ip>...             show which interface Windows routes <ip> to
                                           (read-only: changes nothing)
@@ -40,6 +43,10 @@ func main() {
 		err = cmdCleanup()
 	case "config":
 		err = cmdConfig(os.Args[2:])
+	case "tray":
+		err = cmdTray(os.Args[2:])
+	case "autostart":
+		err = cmdAutostart(os.Args[2:])
 	case "debug":
 		err = cmdDebug(os.Args[2:])
 	default:

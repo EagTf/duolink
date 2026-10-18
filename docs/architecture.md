@@ -131,6 +131,32 @@ The forwarder has no process table when no rules are configured, so then no look
 have a non-zero weight; the primary line for `exclude` is the weighted line
 with the lowest interface metric.
 
+## Tray app
+
+```
+ terminal (admin):  duolink.exe tray
+   └► guiexe.Update: duolinkw.exe = copy with PE Subsystem = GUI (only if changed)
+   └► start duolinkw.exe tray, return at once
+
+ logon task (highest privileges) ──► duolinkw.exe tray
+
+ duolinkw.exe tray (no console):
+   stdout/stderr/log → duolink.log
+   not elevated → relaunch via ShellExecute "runas" (UAC)
+   Localduolink-tray mutex taken → "already running" dialog, exit
+   tray.Run: controller loop
+     want && not running → config.Load + engine.Start (retry every 10 s, log once per error)
+     Pause → engine.Stop (routes first) ; Start → want = true
+     Quit → wait for a start in progress, engine.Stop, exit
+   engine OnStats every 2 s → menu rows, tooltip, icon colour
+```
+
+The engine takes the `Globalduolink-engine` mutex for as long as it runs,
+so `duolink run` and the tray (or two runs) can never both own the routes.
+Every start re-reads `duolink.json`, so Pause → edit → Start applies changes.
+Console tools run from the windowed process would each open a console
+window; `winexec.Command` starts them with `CREATE_NO_WINDOW`.
+
 ## Config
 
 `internal/config`: `Default()` → JSON from `duolink.json` decoded on top (unknown
@@ -143,15 +169,20 @@ Weights stay as name → number until `run` knows the adapters, then
 
 | Package | Contents |
 |---|---|
-| root (`package main`) | the CLI: command dispatch (`main.go`), `list` and `debug route` (`cmd_list.go`), `run`, `cleanup` and the startup self-check (`cmd_run.go`), config flags and `duolink config` (`cmd_config.go`), admin / wintun.dll checks and the IPv6 warning (`checks.go`) |
+| root (`package main`) | the CLI: command dispatch (`main.go`), `list` and `debug route` (`cmd_list.go`), `run` (prints engine stats) and `cleanup` (`cmd_run.go`), config flags and `duolink config` (`cmd_config.go`), `tray` and `autostart` (`cmd_tray.go`) |
+| `internal/engine` | one run of duolink: preconditions (admin, wintun.dll, 2 uplinks), TUN + netstack + routes, self-check, the "one engine per PC" mutex, Stop (undo in reverse), stats sampling |
 | `internal/config` | `duolink.json`: types, defaults, loading, validation, `--weights` syntax |
 | `internal/netif` | adapters (`GetAdaptersAddresses`, skip reasons), the bound dialer (`IP_UNICAST_IF`, ipify lookup), the adapter watcher and `Issue`, name matching (`Find`), overlap and IPv6 checks |
 | `internal/route` | netsh: TUN address, half-default routes; `GetBestInterfaceEx` lookups, TUN readiness, routing dump |
 | `internal/procs` | socket → process lookup (`GetExtendedTcpTable` / `GetExtendedUdpTable`, `QueryFullProcessImageName`) |
 | `internal/balance` | WRR, stickiness, health checks, failed-dial tracking, line state transitions, per-app rules, weight resolution |
-| `internal/forward` | the netstack `TransportHandler`: flow filtering, loop guard, TCP/UDP copy, live stats |
+| `internal/forward` | the netstack `TransportHandler`: flow filtering, loop guard, TCP/UDP copy, per-uplink counters |
+| `internal/tray` | the tray app (fyne.io/systray): menu, tooltip, state icons, Pause/Start controller with retry, single-instance mutex |
+| `internal/guiexe` | the windowed copy: duolinkw.exe = duolink.exe with the PE Subsystem field set to GUI |
+| `internal/autostart` | the logon Task Scheduler task (XML, `schtasks`) |
+| `internal/winexec` | runs console tools (netsh, schtasks, route) with `CREATE_NO_WINDOW` |
 
-Dependencies only point down: `main` → `forward` → `balance` → `netif`, `config`; `forward` also uses `procs` and `route`. Tests sit next to the code they test (`*_test.go` in the same package) and need neither admin rights nor network changes.
+Dependencies only point down: `main` → `tray` → `engine` → `forward` → `balance` → `netif`, `config`; `engine` also uses `route`, `forward` uses `procs` and `route`, `route` and `autostart` use `winexec`. Tests sit next to the code they test (`*_test.go` in the same package) and need neither admin rights nor network changes.
 
 ## Dependencies
 
@@ -160,3 +191,4 @@ Dependencies only point down: `main` → `forward` → `balance` → `netif`, `c
 - `github.com/xjasonlyu/tun2socks/v2/core`: gVisor stack setup and
   TCP/UDP forwarders. Only the core packages are used, not its proxy layer.
 - `gvisor.dev/gvisor`: the netstack itself (most of the binary size).
+- `fyne.io/systray`: the tray icon and menu (pure Go on Windows, no cgo).
