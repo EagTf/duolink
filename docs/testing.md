@@ -60,6 +60,20 @@ if something breaks your connection.
    Expect `Ethernet is DOWN`, new flows only on Wi-Fi, the download continues.
    Replug: `Ethernet is back UP` within about 4 s.
 
+## Health checks under load
+
+1. Set `"timeout_seconds": 5` (or remove the line) and add
+   `"failures_before_down": 2` in duolink.json's `health` section (or leave
+   them out: those are the defaults).
+2. Run duolink (tray or `run`) and start a large Steam download that fills
+   both lines for 10 minutes or more.
+3. **Expected:** no `is DOWN` lines for a working line. If the line is
+   briefly overloaded, the log may show `probe failed (...), 1 of 2 before
+   DOWN; checking again in 4s` followed by `probe succeeded again: stays UP`,
+   and the total speed doesn't drop.
+4. Unplug a line during the download: it still goes DOWN within about a
+   second (`adapter disconnected`), as before.
+
 ## Instant failover
 
 Run `duolink run --for 10m` and keep a download going (Steam, or several

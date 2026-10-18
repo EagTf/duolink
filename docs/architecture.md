@@ -59,9 +59,13 @@ Teardown order (deferred): remove routes → close netstack → close adapter.
 
 ## Health checks
 
-One goroutine per weighted line (`healthLoop` in internal/balance). Each probe TCP-connects to the
-`health.targets` in turn through the bound dialer; one success means up.
-Interval `interval_seconds` while up, `down_interval_seconds` while down.
+One goroutine per weighted line (`healthLoop` in internal/balance). Each probe TCP-connects to all
+`health.targets` in parallel through the bound dialer; the first success means
+up, and a dead line fails after one `timeout_seconds`. Interval
+`interval_seconds` while up, `down_interval_seconds` while down or after a miss.
+A regular probe needs `failures_before_down` misses in a row (default 2) to
+mark a line DOWN; probes kicked by failed dials and adapter events act at
+once (see below).
 State changes are logged. A down line gets no new flows; its existing flows
 are left alone. If every line is down, all weighted lines are used anyway.
 

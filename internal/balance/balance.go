@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +35,10 @@ type uplink struct {
 	// kick asks this line's health loop to probe now. It carries what
 	// triggered the probe, for the log. Buffered 1: one pending request is enough.
 	kick chan string
+
+	// probeFails counts regular probes that failed in a row while UP. Only
+	// the line's health loop (check) touches it.
+	probeFails int
 
 	mu       sync.Mutex       // guards the fields below
 	failDsts []netip.AddrPort // consecutive failed dials, one per destination IP
@@ -247,7 +252,8 @@ func (b *Balancer) Run(ctx context.Context) {
 func (b *Balancer) healthLoop(ctx context.Context, l *uplink) {
 	for {
 		wait := time.Duration(b.health.IntervalSeconds) * time.Second
-		if !l.healthy.Load() {
+		// While DOWN, or after a missed probe, check again sooner.
+		if !l.healthy.Load() || l.probeFails > 0 {
 			wait = time.Duration(b.health.DownIntervalSeconds) * time.Second
 		}
 		why := ""
@@ -263,11 +269,27 @@ func (b *Balancer) healthLoop(ctx context.Context, l *uplink) {
 
 // check probes l and applies the result. why is what triggered the probe ("" =
 // the regular interval). Only a successful probe ever brings a line back UP.
+//
+// A regular probe needs FailuresBeforeDown misses in a row to take a line
+// DOWN: on a saturated line one probe can time out although the line works.
+// A kicked probe (after failed dials) already has other evidence, so one
+// failure is enough there; a disconnected adapter never waits for a probe.
 func (b *Balancer) check(ctx context.Context, l *uplink, why string) {
 	err := b.probe(ctx, l.a)
 	if ctx.Err() != nil {
 		return
 	}
+	if err != nil && why == "" && l.healthy.Load() {
+		l.probeFails++
+		if l.probeFails < b.health.FailuresBeforeDown {
+			b.logf("%s: probe failed (%v), %d of %d before DOWN; checking again in %ds",
+				l.a.Name, err, l.probeFails, b.health.FailuresBeforeDown, b.health.DownIntervalSeconds)
+			return
+		}
+		err = fmt.Errorf("%w (%d in a row)", err, l.probeFails)
+	}
+	missed := l.probeFails
+	l.probeFails = 0
 	if err != nil {
 		reason := "probe failed: " + err.Error()
 		if why != "" {
@@ -281,6 +303,8 @@ func (b *Balancer) check(ctx context.Context, l *uplink, why string) {
 		b.logf("%s is back UP", l.a.Name)
 	case why != "":
 		b.logf("%s: %s, but the probe succeeded: stays UP", l.a.Name, why)
+	case missed > 0:
+		b.logf("%s: probe succeeded again: stays UP", l.a.Name)
 	}
 }
 
@@ -400,22 +424,39 @@ func (b *Balancer) OnAdapterChange() {
 	}
 }
 
-// Probe TCP-connects to each target through a until one answers (no data is
-// sent). The dial uses the same adapter binding as real traffic, so it tests
-// the actual path. Several targets, ideally different operators, so one
-// outage doesn't mark a healthy line down.
+// Probe TCP-connects to all targets at once through a; the line is fine if
+// any of them answers within the timeout (no data is sent). The dials use the
+// same adapter binding as real traffic, so they test the actual path. Several
+// targets, ideally different operators, so one outage doesn't mark a healthy
+// line down.
 func Probe(ctx context.Context, a *netif.Adapter, h config.HealthConfig) error {
-	var errs []string
+	// All targets at once: the first to answer settles it, and a dead line
+	// fails after one timeout instead of one per target.
+	pctx, cancel := context.WithTimeout(ctx, time.Duration(h.TimeoutSeconds)*time.Second)
+	defer cancel() // also stops the dials still running after a success
+	type result struct {
+		target string
+		err    error
+	}
+	results := make(chan result, len(h.Targets))
 	for _, t := range h.Targets {
-		pctx, cancel := context.WithTimeout(ctx, time.Duration(h.TimeoutSeconds)*time.Second)
-		c, err := a.DialTCP4(pctx, t)
-		cancel()
-		if err == nil {
-			c.Close()
+		go func() {
+			c, err := a.DialTCP4(pctx, t)
+			if err == nil {
+				c.Close()
+			}
+			results <- result{t, err}
+		}()
+	}
+	var errs []string
+	for range h.Targets {
+		r := <-results
+		if r.err == nil {
 			return nil
 		}
-		errs = append(errs, fmt.Sprintf("%s: %v", t, shortErr(err)))
+		errs = append(errs, fmt.Sprintf("%s: %v", r.target, shortErr(r.err)))
 	}
+	sort.Strings(errs) // stable log lines
 	return fmt.Errorf("%s", strings.Join(errs, "; "))
 }
 

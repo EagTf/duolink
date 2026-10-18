@@ -54,8 +54,12 @@ type ProcessConfig struct {
 type HealthConfig struct {
 	IntervalSeconds     int      `json:"interval_seconds"`      // probe interval while a line is up
 	DownIntervalSeconds int      `json:"down_interval_seconds"` // ...and while it's down
-	TimeoutSeconds      int      `json:"timeout_seconds"`       // per probe target
+	TimeoutSeconds      int      `json:"timeout_seconds"`       // per probe (targets are tried in parallel)
 	Targets             []string `json:"targets"`               // ip:port, TCP connect only
+	// Regular probes that must fail in a row before a line goes DOWN. A
+	// single miss is common on a saturated line (router buffers full,
+	// latency spikes), so one isn't enough. 1 = the first failure.
+	FailuresBeforeDown int `json:"failures_before_down"`
 }
 
 // Default returns the built-in settings that duolink.json is applied on top of.
@@ -66,8 +70,9 @@ func Default() Config {
 		Health: HealthConfig{
 			IntervalSeconds:     15,
 			DownIntervalSeconds: 4,
-			TimeoutSeconds:      3,
+			TimeoutSeconds:      5,
 			Targets:             []string{"1.1.1.1:443", "8.8.8.8:443"},
+			FailuresBeforeDown:  2,
 		},
 		Processes: ProcessConfig{
 			StickyExempt: []string{"steam.exe"},
@@ -109,6 +114,7 @@ func (c *Config) Validate() error {
 	check(h.IntervalSeconds >= 1, "health.interval_seconds: must be at least 1")
 	check(h.DownIntervalSeconds >= 1, "health.down_interval_seconds: must be at least 1")
 	check(h.TimeoutSeconds >= 1, "health.timeout_seconds: must be at least 1")
+	check(h.FailuresBeforeDown >= 1 && h.FailuresBeforeDown <= 10, "health.failures_before_down: must be 1..10, got %d", h.FailuresBeforeDown)
 	check(len(h.Targets) > 0, "health.targets: need at least one ip:port")
 	for _, t := range h.Targets {
 		ap, err := netip.ParseAddrPort(t)
