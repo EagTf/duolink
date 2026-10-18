@@ -18,6 +18,9 @@ Not released yet. Entries are by milestone; see
   they keep reusing those connections. Setting
   `processes.reconnect_after_outage` (on by default), also in Settings.
 - Pins and "never balance" follow a line whose adapter was replaced.
+- Unplugging a line's adapter counts as an outage until a new line takes its
+  place, so download apps are rebalanced when the adapter is plugged back in
+  too. A probe that finishes after its line was replaced is ignored.
 - Settings: per-app rules as a list with Browse… (pick the program's .exe),
   a rule dropdown (pin to a connected line by name) and Add / update /
   Remove.

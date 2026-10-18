@@ -92,7 +92,10 @@ With the tray running (admin) and the status window open:
    use it.
 3. **Removed adapter.** Unplug a USB adapter: `<name> is DOWN (adapter
    removed)`, then `adapter removed; no longer a line`; its row disappears.
-   Plug it back in and connect: it's added again as a new line.
+   Plug it back in and connect: it's added again as a new line. With a
+   Steam download running during this, the events also show `reconnected N
+   download connections from the outage` once it's back UP, and Steam uses
+   both lines again.
 4. **New address.** For a line that stays plugged in, force a new address:
    `ipconfig /release "Wi-Fi"` then `ipconfig /renew "Wi-Fi"` (or change the
    PC's DHCP reservation on router B). If the address changes, events show

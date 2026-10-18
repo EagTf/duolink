@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ func adapter(name string, luid uint64, index uint32, ip string, metric uint32) *
 type hotRig struct {
 	b         *Balancer
 	eth, wifi *netif.Adapter
+	mu        sync.Mutex // guards log: health loops log from their goroutines
 	log       []string
 }
 
@@ -37,12 +39,18 @@ func newHotRig(t *testing.T, weights map[string]int) *hotRig {
 		t.Fatal(err)
 	}
 	r := &hotRig{b: New(ups, w, &cfg), eth: eth, wifi: wifi}
-	r.b.logf = func(format string, args ...any) { r.log = append(r.log, fmt.Sprintf(format, args...)) }
+	r.b.logf = func(format string, args ...any) {
+		r.mu.Lock()
+		r.log = append(r.log, fmt.Sprintf(format, args...))
+		r.mu.Unlock()
+	}
 	r.b.probe = func(context.Context, *netif.Adapter) error { return nil }
 	return r
 }
 
 func (r *hotRig) logHas(s string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for _, l := range r.log {
 		if strings.Contains(l, s) {
 			return true
@@ -52,6 +60,8 @@ func (r *hotRig) logHas(s string) bool {
 }
 
 func (r *hotRig) line(name string) *uplink {
+	r.b.mu.Lock()
+	defer r.b.mu.Unlock()
 	for _, l := range r.b.links {
 		if l.a.Name == name {
 			return l
@@ -211,11 +221,13 @@ func TestHealthLoopsFollowLines(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("the new line's health loop didn't probe it")
 	}
-	if l := r.line("Phone"); l == nil || !l.healthy.Load() {
-		// give the loop a moment to apply the result
-		time.Sleep(50 * time.Millisecond)
-		if l = r.line("Phone"); l == nil || !l.healthy.Load() {
-			t.Error("new line not UP after its probe")
+	// The loop applies the result right after the probe returns.
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if l := r.line("Phone"); l != nil && l.healthy.Load() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("new line not UP after its probe")
 		}
 	}
 }
@@ -242,5 +254,49 @@ func TestPickFlowReportsOutageAndOnLineUpFires(t *testing.T) {
 	r.b.check(context.Background(), r.b.link(r.eth), "")
 	if len(up) != 1 {
 		t.Errorf("OnLineUp fired for a line that was already UP: %v", up)
+	}
+}
+
+// Unplugging a line's adapter is an outage too: flows placed while it's gone
+// are rebalanced when a new line (the adapter plugged back in) comes UP.
+func TestRemovedLineCountsAsOutageUntilReplaced(t *testing.T) {
+	r := newHotRig(t, nil)
+	exempt := Rule{Kind: RuleStickyExempt}
+	r.b.applyAdapters([]*netif.Adapter{r.eth})
+	if a, outage := r.b.PickFlow(netip.MustParseAddr("203.0.113.30"), exempt); a != r.eth || !outage {
+		t.Fatalf("Wi-Fi unplugged: got %v, outage=%v; want Ethernet, true", a.Name, outage)
+	}
+
+	var up []string
+	r.b.OnLineUp(func(a *netif.Adapter) { up = append(up, a.Name) })
+	back := adapter("Wi-Fi", 2, 31, "192.168.1.20/24", 40) // same LUID, new index
+	r.b.applyAdapters([]*netif.Adapter{r.eth, back})
+	nl := r.line("Wi-Fi")
+	if nl == nil {
+		t.Fatal("plugged-in adapter is not a line")
+	}
+	if _, outage := r.b.PickFlow(netip.MustParseAddr("203.0.113.31"), exempt); !outage {
+		t.Error("the new line isn't UP yet, so it's still an outage")
+	}
+	r.b.check(context.Background(), nl, "new line")
+	if len(up) != 1 || up[0] != "Wi-Fi" {
+		t.Errorf("OnLineUp calls = %v, want [Wi-Fi]", up)
+	}
+	if _, outage := r.b.PickFlow(netip.MustParseAddr("203.0.113.32"), exempt); outage {
+		t.Error("both lines are UP again, but PickFlow still reports an outage")
+	}
+}
+
+// A probe that finishes after its line was replaced changes nothing.
+func TestStaleProbeIgnored(t *testing.T) {
+	r := newHotRig(t, nil)
+	old := r.b.link(r.wifi)
+	r.b.SetHealthy(r.wifi, false)
+	fired := false
+	r.b.OnLineUp(func(*netif.Adapter) { fired = true })
+	r.b.applyAdapters([]*netif.Adapter{r.eth, adapter("Wi-Fi", 2, 31, "192.168.1.21/24", 40)})
+	r.b.check(context.Background(), old, "")
+	if old.healthy.Load() || fired || r.logHas("Wi-Fi is back UP") {
+		t.Errorf("stale probe applied: healthy=%v, OnLineUp=%v, log %q", old.healthy.Load(), fired, r.log)
 	}
 }

@@ -111,9 +111,8 @@ and weights.
 and game servers seeing one public IP, which avoids session and anti-cheat
 trouble. Big downloads still spread because CDNs use several IPs (verified
 with Steam). A destination moved by failover stays on its new line, since
-the point is IP consistency. Under review: with a sliding timer this keeps a
-long download on one line after the failed line recovers (see
-docs/action_items.md).
+the point is IP consistency, but only until a line comes back (see "After
+an outage, destinations that moved are rebalanced" above).
 
 **Per-app rules by exe file name, looked up per flow.** Mapping the app's
 socket (198.18.0.1:port) through the owner tables is exact and needs no

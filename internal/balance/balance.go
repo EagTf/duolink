@@ -70,6 +70,10 @@ type Balancer struct {
 	stickyTTL time.Duration // 0 = stickiness off
 	sticky    map[netip.Addr]*stickyEntry
 	allDown   bool // for printing the fallback warning once per outage
+	// missing counts weighted lines whose adapter was removed (unplugged)
+	// and not yet replaced by a new line. Until then it's an outage like a
+	// DOWN line, so flows placed meanwhile are rebalanced when one comes up.
+	missing int
 
 	onLineUp func(*netif.Adapter) // set by OnLineUp
 
@@ -174,7 +178,7 @@ func (b *Balancer) candidates() (cands []*uplink, outage bool) {
 	}
 	if len(cands) > 0 {
 		b.allDown = false
-		return cands, len(cands) < len(weighted)
+		return cands, len(cands) < len(weighted) || b.missing > 0
 	}
 	if !b.allDown && len(weighted) > 0 {
 		b.allDown = true
@@ -422,8 +426,8 @@ func (b *Balancer) healthLoop(ctx context.Context, l *uplink) {
 // failure is enough there; a disconnected adapter never waits for a probe.
 func (b *Balancer) check(ctx context.Context, l *uplink, why string) {
 	err := b.probe(ctx, l.a)
-	if ctx.Err() != nil {
-		return
+	if ctx.Err() != nil || !b.isLine(l) {
+		return // stopped, or replaced while probing: the result is stale
 	}
 	if err != nil && why == "" && l.healthy.Load() {
 		l.probeFails++
@@ -456,6 +460,13 @@ func (b *Balancer) check(ctx context.Context, l *uplink, why string) {
 	case missed > 0:
 		b.logf("%s: probe succeeded again: stays UP", l.a.Name)
 	}
+}
+
+// isLine reports whether l is still one of the current lines.
+func (b *Balancer) isLine(l *uplink) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Contains(b.links, l)
 }
 
 // setDown marks l DOWN and logs why, if it was UP.
@@ -600,11 +611,18 @@ func (b *Balancer) applyAdapters(all []*netif.Adapter) {
 			b.setDown(l, "adapter removed")
 			b.logf("%s: adapter removed; no longer a line", l.a.Name)
 			l.stop()
+			if l.weight > 0 {
+				b.missing++
+			}
 			continue
 		case netif.Moved(l.a, cur):
 			nl := newUplink(cur, l.weight)
-			b.logf("%s: now at %s, index %d (was %s, index %d); probing it",
-				cur.Name, cur.IPv4.Addr(), cur.Index, l.a.IPv4.Addr(), l.a.Index)
+			probing := "; probing it"
+			if l.weight == 0 {
+				probing = "" // unused line: no health loop
+			}
+			b.logf("%s: now at %s, index %d (was %s, index %d)%s",
+				cur.Name, cur.IPv4.Addr(), cur.Index, l.a.IPv4.Addr(), l.a.Index, probing)
 			l.stop()
 			lines = append(lines, nl)
 			b.startLoop(nl)
@@ -626,6 +644,9 @@ func (b *Balancer) applyAdapters(all []*netif.Adapter) {
 		if w == 0 {
 			b.logf("%s: new line, but its weight in the settings is 0, so it isn't used", u.Name)
 			continue
+		}
+		if b.missing > 0 {
+			b.missing-- // it takes the removed line's place
 		}
 		b.logf("%s: new line (weight %d); probing it", u.Name, w)
 		b.startLoop(nl)
