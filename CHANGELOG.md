@@ -12,6 +12,11 @@ Not released yet. Entries are by milestone; see
   returns with a new address or interface index is used at the new address,
   and a removed adapter is dropped. New and changed lines are probed before
   they get traffic. No more "restart duolink to use it".
+- When a line comes back, connections that "balance every connection" apps
+  (Steam) opened during the outage are closed so they reconnect over all
+  lines; their downloads would otherwise stay on the surviving line, since
+  they keep reusing those connections. Setting
+  `processes.reconnect_after_outage` (on by default), also in Settings.
 - Pins and "never balance" follow a line whose adapter was replaced.
 - Settings: per-app rules as a list with Browse… (pick the program's .exe),
   a rule dropdown (pin to a connected line by name) and Add / update /

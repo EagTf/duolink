@@ -219,3 +219,28 @@ func TestHealthLoopsFollowLines(t *testing.T) {
 		}
 	}
 }
+
+func TestPickFlowReportsOutageAndOnLineUpFires(t *testing.T) {
+	r := newHotRig(t, nil)
+	exempt := Rule{Kind: RuleStickyExempt}
+	if _, outage := r.b.PickFlow(netip.MustParseAddr("203.0.113.20"), exempt); outage {
+		t.Error("no line is DOWN, but PickFlow reported an outage")
+	}
+	r.b.SetHealthy(r.wifi, false)
+	a, outage := r.b.PickFlow(netip.MustParseAddr("203.0.113.21"), exempt)
+	if a != r.eth || !outage {
+		t.Errorf("Wi-Fi DOWN: got %v, outage=%v; want Ethernet, true", a.Name, outage)
+	}
+
+	var up []string
+	r.b.OnLineUp(func(a *netif.Adapter) { up = append(up, a.Name) })
+	r.b.check(context.Background(), r.b.link(r.wifi), "")
+	if len(up) != 1 || up[0] != "Wi-Fi" {
+		t.Errorf("OnLineUp calls = %v, want [Wi-Fi]", up)
+	}
+	// A line that was already UP doesn't fire it again.
+	r.b.check(context.Background(), r.b.link(r.eth), "")
+	if len(up) != 1 {
+		t.Errorf("OnLineUp fired for a line that was already UP: %v", up)
+	}
+}

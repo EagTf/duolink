@@ -49,6 +49,11 @@ type ProcessConfig struct {
 	// Not balanced: always the line Windows itself would use (lowest
 	// interface metric), or another one while that's DOWN.
 	Exclude []string `json:"exclude"`
+	// When a line comes back after an outage, close the connections that
+	// StickyExempt apps opened during it, so they reconnect over all lines.
+	// For download apps (Steam) that keep reusing their connections: without
+	// this their download stays on the line that survived.
+	ReconnectAfterOutage bool `json:"reconnect_after_outage"`
 }
 
 type HealthConfig struct {
@@ -75,9 +80,10 @@ func Default() Config {
 			FailuresBeforeDown:  2,
 		},
 		Processes: ProcessConfig{
-			StickyExempt: []string{"steam.exe"},
-			Pin:          map[string]string{},
-			Exclude:      []string{},
+			StickyExempt:         []string{"steam.exe"},
+			Pin:                  map[string]string{},
+			Exclude:              []string{},
+			ReconnectAfterOutage: true,
 		},
 		UDPIdleSeconds: 60,
 	}

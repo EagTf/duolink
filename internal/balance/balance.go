@@ -71,6 +71,8 @@ type Balancer struct {
 	sticky    map[netip.Addr]*stickyEntry
 	allDown   bool // for printing the fallback warning once per outage
 
+	onLineUp func(*netif.Adapter) // set by OnLineUp
+
 	// Replaceable in tests.
 	now   func() time.Time
 	probe func(ctx context.Context, a *netif.Adapter) error
@@ -112,11 +114,19 @@ func (b *Balancer) Pick(dst netip.Addr) *netif.Adapter { return b.PickFor(dst, R
 //     usable), so the remote side sees one public IP. Everything else is
 //     balanced.
 func (b *Balancer) PickFor(dst netip.Addr, r Rule) *netif.Adapter {
+	a, _ := b.PickFlow(dst, r)
+	return a
+}
+
+// PickFlow is PickFor that also reports whether a weighted line was DOWN
+// when the flow was placed: such a flow is on the surviving line only because
+// of the outage (see OnLineUp).
+func (b *Balancer) PickFlow(dst netip.Addr, r Rule) (_ *netif.Adapter, duringOutage bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	cands, outage := b.candidates()
 	if len(cands) == 0 {
-		return nil
+		return nil, outage
 	}
 	switch r.Kind {
 	case RulePin, RuleExclude:
@@ -127,24 +137,24 @@ func (b *Balancer) PickFor(dst netip.Addr, r Rule) *netif.Adapter {
 			target = b.byName(r.Pin)
 		}
 		if target != nil && contains(cands, target) {
-			return target
+			return target, outage
 		}
-		return wrr(cands)
+		return wrr(cands), outage
 	case RuleStickyExempt:
-		return wrr(cands)
+		return wrr(cands), outage
 	}
 	now := b.now()
 	if b.stickyTTL > 0 {
 		if e := b.sticky[dst]; e != nil && now.Sub(e.last) < b.stickyTTL && contains(cands, e.a) {
 			e.last = now
-			return e.a
+			return e.a, outage
 		}
 	}
 	a := wrr(cands)
 	if b.stickyTTL > 0 {
 		b.sticky[dst] = &stickyEntry{a: a, last: now, duringOutage: outage}
 	}
-	return a
+	return a, outage
 }
 
 // candidates returns the uplinks that may get new flows: weighted and
@@ -269,6 +279,11 @@ func (b *Balancer) expireSticky() {
 		}
 	}
 }
+
+// OnLineUp calls f whenever a line comes (back) UP: after an outage, or a new
+// or moved line's first good probe. It runs on that line's health loop. Call
+// it before Run.
+func (b *Balancer) OnLineUp(f func(a *netif.Adapter)) { b.onLineUp = f }
 
 // OnLog also hands every health and failover log line (DOWN, back UP, ...)
 // to f, e.g. for a window's event list. Call it before Run.
@@ -433,6 +448,9 @@ func (b *Balancer) check(ctx context.Context, l *uplink, why string) {
 	case !l.healthy.Swap(true):
 		b.logf("%s is back UP", l.a.Name)
 		b.forgetOutageEntries()
+		if f := b.onLineUp; f != nil {
+			f(l.a)
+		}
 	case why != "":
 		b.logf("%s: %s, but the probe succeeded: stays UP", l.a.Name, why)
 	case missed > 0:

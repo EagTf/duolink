@@ -124,6 +124,10 @@ and "exclude" are resolved by name at each pick (`byName`, `primary`).
 A sticky entry created while a weighted line is DOWN is flagged
 `duringOutage`; when any line comes back UP (`check`), flagged entries are
 forgotten (`forgetOutageEntries`) and those destinations are balanced again.
+Flows from sticky-exempt apps placed during an outage (`PickFlow` reports
+it) are tracked by the forwarder; on `OnLineUp` the engine calls
+`CloseOutageFlows`, so those apps reconnect over all lines
+(`processes.reconnect_after_outage`).
 
 ## Stickiness
 

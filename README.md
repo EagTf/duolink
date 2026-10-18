@@ -222,7 +222,10 @@ from the settings (1 if you haven't set any). An adapter that comes back
 with a new address is used at the new address, and an unplugged one is
 dropped. Each new or changed line is checked first and only gets traffic
 once it works. After a line comes back from an outage, the sites that had
-moved to the other line are spread over both lines again.
+moved to the other line are spread over both lines again. Downloads from
+"Balance every connection" apps like Steam are reconnected too, so they use
+both lines again without pausing them (Settings, or
+`"reconnect_after_outage": false` under `processes`, turns that off).
 
 ## Known limits
 

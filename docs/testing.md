@@ -81,7 +81,9 @@ With the tray running (admin) and the status window open:
 1. **Rebalance after an outage.** Start a Steam download (both lines carry
    traffic). Disconnect Wi-Fi: Wi-Fi DOWN, the download continues on
    Ethernet. Reconnect it: after `Wi-Fi is back UP`, the events show
-   `rebalancing N destinations that moved during the outage`, and within a
+   `rebalancing N destinations that moved during the outage`, and
+   `reconnected N download connections from the outage, so they use all
+   lines again`, and within a
    minute or so Wi-Fi carries download traffic again without pausing Steam.
 2. **New adapter.** Plug in a second network adapter (the new Wi-Fi stick,
    or a phone via USB tethering) and connect it: events show

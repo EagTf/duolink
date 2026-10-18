@@ -74,3 +74,21 @@ func TestFriendlyRealLineErrors(t *testing.T) {
 		t.Errorf("got %q", err)
 	}
 }
+
+func TestFormReconnectSetting(t *testing.T) {
+	f := formFromConfig(config.Default(), lines)
+	if !f.Reconnect {
+		t.Fatal("reconnect after outage should default to on")
+	}
+	f.Reconnect = false
+	c, err := f.toConfig()
+	if err != nil || c.Processes.ReconnectAfterOutage {
+		t.Errorf("turning it off was lost: %v %v", c.Processes.ReconnectAfterOutage, err)
+	}
+	f.Reconnect = true
+	f.Rules = append(f.Rules, ruleRow{Exe: "game.exe", Kind: rulePin, Line: "Ethernet"})
+	c, _ = f.toConfig()
+	if !c.Processes.ReconnectAfterOutage || c.Processes.Pin["game.exe"] != "Ethernet" {
+		t.Errorf("rules and the setting must both survive: %+v", c.Processes)
+	}
+}

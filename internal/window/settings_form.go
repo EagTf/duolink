@@ -27,7 +27,8 @@ type form struct {
 
 	UDPIdle string
 
-	Rules []ruleRow // per-app rules, one per program
+	Rules     []ruleRow // per-app rules, one per program
+	Reconnect bool      // processes.reconnect_after_outage
 }
 
 // formFromConfig fills the form from c, with one weight field per line in
@@ -49,6 +50,7 @@ func formFromConfig(c config.Config, lines []string) form {
 		Targets:      strings.Join(c.Health.Targets, ", "),
 		UDPIdle:      strconv.Itoa(c.UDPIdleSeconds),
 		Rules:        rowsFromConfig(c.Processes, lines),
+		Reconnect:    c.Processes.ReconnectAfterOutage,
 	}
 	adapters := make([]*netif.Adapter, len(lines))
 	for i, name := range lines {
@@ -107,6 +109,7 @@ func (f form) toConfig() (config.Config, error) {
 	c.UDPIdleSeconds = num("UDP idle", f.UDPIdle)
 
 	c.Processes = rowsToConfig(f.Rules)
+	c.Processes.ReconnectAfterOutage = f.Reconnect // not part of the rule list
 
 	if len(errs) > 0 {
 		return c, errors.Join(errs...)

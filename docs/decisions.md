@@ -93,7 +93,11 @@ entries are forgotten, so the next connection to them is balanced over all
 lines again. Without this, a long download that reconnects to the same
 servers kept them on the surviving line for good (seen in the milestone 7
 test). Entries from before the outage keep their line, so most sites still
-see one IP.
+see one IP. That alone didn't help Steam, which is sticky-exempt and keeps
+reusing the connections it opened during the outage, so for "balance every
+connection" apps those connections are also closed when a line comes back
+(they retry the piece in flight and reconnect over all lines). Games, voice
+and other apps keep theirs: cutting them would hurt. Optional, on by default.
 
 **Per-app rules are edited as a list, one rule per program.** A file picker
 and a line dropdown replace typed `exe = line` text; a program can only

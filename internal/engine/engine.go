@@ -151,7 +151,19 @@ func Start(o Options) (_ *Engine, err error) {
 
 	// The netstack: every TCP/UDP flow Windows routes into the TUN is
 	// terminated here and handed to the forwarder.
-	e.fwd = forward.New(e.bal, rules, cfg.UDPIdle())
+	e.fwd = forward.New(e.bal, rules, cfg.UDPIdle(), cfg.Processes.ReconnectAfterOutage)
+	// When a line comes back, download apps' connections from the outage are
+	// closed so they reconnect over all lines (only those; see forward).
+	e.bal.OnLineUp(func(*netif.Adapter) {
+		if n := e.fwd.CloseOutageFlows(); n > 0 {
+			line := fmt.Sprintf("%s reconnected %d download connections from the outage, so they use all lines again",
+				time.Now().Format("15:04:05"), n)
+			fmt.Println(line)
+			if o.OnEvent != nil {
+				o.OnEvent(line)
+			}
+		}
+	})
 	st, err := core.CreateStack(&core.Config{LinkEndpoint: dev, TransportHandler: e.fwd})
 	if err != nil {
 		return nil, fmt.Errorf("start netstack: %w", err)

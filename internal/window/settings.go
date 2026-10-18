@@ -33,6 +33,7 @@ const (
 	idRuleAdd
 	idRuleRemove
 	idBrowse
+	idReconnect
 )
 
 // settingsUI holds the settings window's controls. It lives on the window
@@ -47,6 +48,7 @@ type settingsUI struct {
 	interval, downInterval, timeout, misses uintptr
 	targets, udpIdle                        uintptr
 	ruleList, ruleExe, ruleKind             uintptr // per-app rules: list, program field, rule dropdown
+	reconnect                               uintptr // "reconnect download apps after an outage" checkbox
 	rules                                   []ruleRow
 	options                                 []ruleOption
 	message, save                           uintptr
@@ -95,7 +97,7 @@ func (w *Window) createSettings() error {
 
 	dpi, _, _ := pGetDpiForSystem.Call()
 	s := func(v int) uintptr { return uintptr(v * int(dpi) / 96) }
-	const clientW, clientH = 608, 650
+	const clientW, clientH = 608, 676
 	style := uintptr(wsCaption | wsSysMenu | wsMinimizeBox)
 	r := rect{0, 0, int32(s(clientW)), int32(s(clientH))}
 	pAdjustWindowRectEx.Call(ptr(&r), style, 0, 0)
@@ -173,11 +175,13 @@ func (w *Window) createSettings() error {
 	ctl("BUTTON", "Add / update", bsPushButton|wsTabStop, 0, 506, 497, 86, 26, idRuleAdd, ui)
 	label("Pick a program with Browse… (or type its name, like game.exe), choose what duolink does with "+
 		"its connections, then Add / update. Select a rule to change or remove it.", 16, 528, 576, 32)
+	u.reconnect = ctl("BUTTON", "After an outage, reconnect \"Balance every connection\" apps (like Steam) on all lines",
+		bsAutoCheckBox|wsTabStop, 0, 16, 562, 576, 22, idReconnect, ui)
 
-	u.message = ctl("STATIC", "", 0, 0, 16, 566, 576, 40, 0, ui)
-	ctl("BUTTON", "Reset to defaults", bsPushButton|wsTabStop, 0, 16, 612, 130, 30, idDefaults, ui)
-	ctl("BUTTON", "Cancel", bsPushButton|wsTabStop, 0, 346, 612, 110, 30, idCancel, ui)
-	u.save = ctl("BUTTON", "Save and apply", bsPushButton|wsTabStop, 0, 464, 612, 128, 30, idSave, ui)
+	u.message = ctl("STATIC", "", 0, 0, 16, 592, 576, 40, 0, ui)
+	ctl("BUTTON", "Reset to defaults", bsPushButton|wsTabStop, 0, 16, 638, 130, 30, idDefaults, ui)
+	ctl("BUTTON", "Cancel", bsPushButton|wsTabStop, 0, 346, 638, 110, 30, idCancel, ui)
+	u.save = ctl("BUTTON", "Save and apply", bsPushButton|wsTabStop, 0, 464, 638, 128, 30, idSave, ui)
 	w.set = u
 	return nil
 }
@@ -200,6 +204,11 @@ func (w *Window) fillSettings(f form) {
 		check = 1
 	}
 	pSendMessageW.Call(u.stickyOn, bmSetCheck, check, 0)
+	check = 0
+	if f.Reconnect {
+		check = 1
+	}
+	pSendMessageW.Call(u.reconnect, bmSetCheck, check, 0)
 	for h, v := range map[uintptr]string{
 		u.stickyMin: f.StickyMin, u.interval: f.Interval, u.downInterval: f.DownInterval,
 		u.timeout: f.Timeout, u.misses: f.Failures, u.targets: f.Targets, u.udpIdle: f.UDPIdle,
@@ -219,6 +228,8 @@ func (w *Window) readSettings() form {
 	}
 	on, _, _ := pSendMessageW.Call(u.stickyOn, bmGetCheck, 0, 0)
 	f.StickyOn = on == 1
+	on, _, _ = pSendMessageW.Call(u.reconnect, bmGetCheck, 0, 0)
+	f.Reconnect = on == 1
 	f.StickyMin = getText(u.stickyMin)
 	f.Interval = getText(u.interval)
 	f.DownInterval = getText(u.downInterval)

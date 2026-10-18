@@ -238,6 +238,12 @@ Delivered:
   loop guard, stats, the tray menu and the window follow the current lines.
 - Pins and "exclude" are resolved by line name at each pick, so they follow
   a replaced adapter.
+- Found in the test: Steam kept downloading on Ethernet after Wi-Fi came
+  back, because it reuses connections opened during the outage (it's
+  sticky-exempt, so the sticky rebalance doesn't touch it). Added: when a
+  line comes back UP, connections that "balance every connection" apps
+  opened during the outage are closed so they reconnect over all lines
+  (`processes.reconnect_after_outage`, default on; checkbox in Settings).
 - Settings window: per-app rules as a list (one rule per program), with a
   program field, Browse… (standard Open dialog for an .exe), a rule
   dropdown (balance every connection, never balance, pin to each connected
