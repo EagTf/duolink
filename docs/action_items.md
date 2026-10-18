@@ -15,8 +15,8 @@
   with the process (expected) or `cleanup` reports a leftover adapter.
 - [ ] Retry on the other line (milestone 13): during a download, unplug
   router B's DSL cable while Wi-Fi stays connected. Expect "Connections
-  saved by trying the other line" in the window, then Wi-Fi DOWN. Also
-  2:1 weights: the TCP column about 2:1.
+  saved by trying the other line" in the window, then Wi-Fi DOWN. (2:1
+  weights were confirmed in the milestone 14 test.)
 - [ ] Single-line runs: `--weights eth=1,wifi=0` and `--weights eth=0,wifi=1`.
 
 ## Known issues

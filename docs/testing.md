@@ -75,6 +75,27 @@ if something breaks your connection.
 4. Unplug a line during the download: it still goes DOWN within about a
    second (`adapter disconnected`), as before.
 
+## Automatic weights (milestone 14)
+
+With the tray running (admin), default settings (no weights set):
+
+1. **Start.** Open log shows `weights: automatic, ...`. The status window's
+   weight column is titled `Auto` and shows 100 for both lines.
+2. **Measured.** Start a Steam download. Within a few seconds the events
+   show `automatic weights from measured speed: Ethernet 100 (… Mbit/s),
+   Wi-Fi … (… Mbit/s)`. With two equal 25 Mbit/s lines both stay near 100.
+3. **A slower line.** Limit one line (e.g. the router's QoS, or a phone
+   tether as the second line): its Auto weight drops to about its share of
+   the faster line, and the TCP column follows that ratio.
+4. **PC down.** The `PC down` column is close to `Down Mbit/s` during the
+   download, and higher than it while something duolink doesn't carry runs
+   (a big copy from another PC on the LAN).
+5. **Settings.** The "Automatic" checkbox is ticked and the weight fields
+   are greyed out. Untick it, set Ethernet 2 / Wi-Fi 1, Save and apply: the
+   column is titled `Weight` again and shows 2 and 1. Tick it again, save:
+   back to `Auto`. duolink.json shows `"auto_weights"` accordingly.
+6. **Status window** is wider and the table fits without wrapping.
+
 ## Smarter balancing (milestone 13)
 
 With the tray running (admin) and the status window open:

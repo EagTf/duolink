@@ -20,6 +20,9 @@ type Config struct {
 	// Flow share per uplink, e.g. {"eth": 1, "wifi": 1}. Keys match adapter
 	// names like --weights does. Empty = every usable uplink gets 1.
 	Weights map[string]int `json:"weights"`
+	// With no Weights set, each line's share follows its measured speed
+	// (see AutoWeighted). Weights set by hand always win.
+	AutoWeights bool `json:"auto_weights"`
 
 	Sticky    StickyConfig  `json:"sticky"`
 	Health    HealthConfig  `json:"health"`
@@ -70,8 +73,9 @@ type HealthConfig struct {
 // Default returns the built-in settings that duolink.json is applied on top of.
 func Default() Config {
 	return Config{
-		Weights: map[string]int{},
-		Sticky:  StickyConfig{Enabled: true, Minutes: 10},
+		Weights:     map[string]int{},
+		AutoWeights: true,
+		Sticky:      StickyConfig{Enabled: true, Minutes: 10},
 		Health: HealthConfig{
 			IntervalSeconds:     15,
 			DownIntervalSeconds: 4,
@@ -96,6 +100,10 @@ func (c *Config) StickyTTL() time.Duration {
 	}
 	return time.Duration(c.Sticky.Minutes) * time.Minute
 }
+
+// AutoWeighted reports whether line shares follow measured speed: automatic
+// weights are on and no weights were set by hand.
+func (c *Config) AutoWeighted() bool { return c.AutoWeights && len(c.Weights) == 0 }
 
 // UDPIdle is the UDP idle timeout as a duration.
 func (c *Config) UDPIdle() time.Duration {

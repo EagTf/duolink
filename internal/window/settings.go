@@ -34,6 +34,7 @@ const (
 	idRuleRemove
 	idBrowse
 	idReconnect
+	idAutoWeights
 )
 
 // settingsUI holds the settings window's controls. It lives on the window
@@ -42,6 +43,7 @@ type settingsUI struct {
 	hwnd        uintptr
 	lineLabels  [maxFormLines]uintptr
 	lineWeights [maxFormLines]uintptr
+	autoWeights uintptr // "shares from measured speed" checkbox
 	lines       []string
 
 	stickyOn, stickyMin                     uintptr
@@ -97,7 +99,7 @@ func (w *Window) createSettings() error {
 
 	dpi, _, _ := pGetDpiForSystem.Call()
 	s := func(v int) uintptr { return uintptr(v * int(dpi) / 96) }
-	const clientW, clientH = 608, 676
+	const clientW, clientH = 608, 698
 	style := uintptr(wsCaption | wsSysMenu | wsMinimizeBox)
 	r := rect{0, 0, int32(s(clientW)), int32(s(clientH))}
 	pAdjustWindowRectEx.Call(ptr(&r), style, 0, 0)
@@ -113,9 +115,10 @@ func (w *Window) createSettings() error {
 	ui := font("Segoe UI", 9, fwNormal, dpi)
 	bold := font("Segoe UI", 9, fwSemiBold, dpi)
 	mono := font("Consolas", 10, fwNormal, dpi)
+	dy := 0 // moves everything below the line weights down by the automatic-weights checkbox
 	ctl := func(class, text string, style uintptr, exStyle uintptr, x, y, cw, ch int, id uintptr, f uintptr) uintptr {
 		h, _, _ := pCreateWindowExW.Call(exStyle, ptr(utf16(class)), ptr(utf16(text)),
-			wsChild|wsVisible|style, s(x), s(y), s(cw), s(ch), hwnd, id, uintptr(instance), 0)
+			wsChild|wsVisible|style, s(x), s(y+dy), s(cw), s(ch), hwnd, id, uintptr(instance), 0)
 		pSendMessageW.Call(h, wmSetFont, f, 1)
 		return h
 	}
@@ -129,12 +132,15 @@ func (w *Window) createSettings() error {
 	}
 
 	heading("Lines", 12)
-	label("Each line's share of new connections. 0 = don't use that line. All at 1 = share equally.", 16, 31, 576, 16)
+	u.autoWeights = ctl("BUTTON", "Automatic: each line's share of new connections follows its measured speed",
+		bsAutoCheckBox|wsTabStop, 0, 16, 30, 576, 22, idAutoWeights, ui)
+	label("Or set the shares by hand: 0 = don't use that line. All at 1 = share equally.", 16, 55, 576, 16)
 	for i := range u.lineWeights {
-		x, y := 24+(i%2)*292, 52+(i/2)*28
+		x, y := 24+(i%2)*292, 74+(i/2)*28
 		u.lineLabels[i] = label("", x, y+3, 170, 18)
 		u.lineWeights[i] = number(x+176, y)
 	}
+	dy = 22
 
 	heading("Stickiness", 116)
 	u.stickyOn = ctl("BUTTON", "Keep each destination on the same line for", bsAutoCheckBox|wsTabStop, 0, 24, 136, 270, 22, idStickyOn, ui)
@@ -200,6 +206,12 @@ func (w *Window) fillSettings(f form) {
 		pShowWindow.Call(u.lineWeights[i], show)
 	}
 	check := uintptr(0)
+	if f.AutoWeights {
+		check = 1
+	}
+	pSendMessageW.Call(u.autoWeights, bmSetCheck, check, 0)
+	w.enableWeights()
+	check = 0
 	if f.StickyOn {
 		check = 1
 	}
@@ -226,7 +238,9 @@ func (w *Window) readSettings() form {
 	for i := range u.lines {
 		f.Weights = append(f.Weights, getText(u.lineWeights[i]))
 	}
-	on, _, _ := pSendMessageW.Call(u.stickyOn, bmGetCheck, 0, 0)
+	on, _, _ := pSendMessageW.Call(u.autoWeights, bmGetCheck, 0, 0)
+	f.AutoWeights = on == 1
+	on, _, _ = pSendMessageW.Call(u.stickyOn, bmGetCheck, 0, 0)
 	f.StickyOn = on == 1
 	on, _, _ = pSendMessageW.Call(u.reconnect, bmGetCheck, 0, 0)
 	f.Reconnect = on == 1
@@ -283,11 +297,27 @@ func (w *Window) settingsProc(hwnd, message, wParam, lParam uintptr) uintptr {
 			w.addRule()
 		case idRuleRemove:
 			w.removeRule()
+		case idAutoWeights:
+			w.enableWeights()
 		}
 		return 0
 	}
 	r, _, _ := pDefWindowProcW.Call(hwnd, message, wParam, lParam)
 	return r
+}
+
+// enableWeights greys out the weight fields while automatic weights are
+// ticked (EnableWindow): they're not used then.
+func (w *Window) enableWeights() {
+	u := w.set
+	on, _, _ := pSendMessageW.Call(u.autoWeights, bmGetCheck, 0, 0)
+	enable := uintptr(1)
+	if on == 1 {
+		enable = 0
+	}
+	for i := range u.lineWeights {
+		pEnableWindow.Call(u.lineWeights[i], enable)
+	}
 }
 
 // showRules refills the rule list and the rule dropdown, and selects the

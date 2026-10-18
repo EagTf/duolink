@@ -125,7 +125,7 @@ func (w *Window) loop(icon []byte, ready chan<- error) {
 	// Layout in 96-DPI units, scaled to the system DPI.
 	dpi, _, _ := pGetDpiForSystem.Call()
 	s := func(v int) int32 { return int32(v * int(dpi) / 96) }
-	const clientW, clientH = 640, 420
+	const clientW, clientH = 720, 420
 	style := uintptr(wsCaption | wsSysMenu | wsMinimizeBox)
 	r := rect{0, 0, s(clientW), s(clientH)}
 	pAdjustWindowRectEx.Call(ptr(&r), style, 0, 0)
@@ -147,12 +147,12 @@ func (w *Window) loop(icon []byte, ready chan<- error) {
 	bold := font("Segoe UI", 12, fwSemiBold, dpi)
 	mono := font("Consolas", 10, fwNormal, dpi)
 
-	w.status = child("STATIC", "Starting…", 0, 0, 14, 12, 612, 26, 0)
-	w.text = child("EDIT", "", esMultiline|esReadOnly|esAutoVScroll|wsVScroll, wsExClientEdge, 14, 46, 612, 318, 0)
+	w.status = child("STATIC", "Starting…", 0, 0, 14, 12, 692, 26, 0)
+	w.text = child("EDIT", "", esMultiline|esReadOnly|esAutoVScroll|wsVScroll, wsExClientEdge, 14, 46, 692, 318, 0)
 	w.toggle = child("BUTTON", "Pause", bsPushButton|wsTabStop, 0, 14, 376, 100, 30, idToggle)
 	logBtn := child("BUTTON", "Open log", bsPushButton|wsTabStop, 0, 122, 376, 100, 30, idLog)
 	setBtn := child("BUTTON", "Settings", bsPushButton|wsTabStop, 0, 230, 376, 100, 30, idSettings)
-	quitBtn := child("BUTTON", "Quit", bsPushButton|wsTabStop, 0, 526, 376, 100, 30, idQuit)
+	quitBtn := child("BUTTON", "Quit", bsPushButton|wsTabStop, 0, 606, 376, 100, 30, idQuit)
 	for h, f := range map[uintptr]uintptr{w.status: bold, w.text: mono, w.toggle: ui, logBtn: ui, setBtn: ui, quitBtn: ui} {
 		pSendMessageW.Call(h, wmSetFont, f, 1)
 	}

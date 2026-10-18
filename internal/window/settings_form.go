@@ -16,8 +16,9 @@ const maxFormLines = 4
 // form is the settings window's fields as text, the way the user sees and
 // types them. formFromConfig and toConfig convert to and from duolink.json.
 type form struct {
-	Lines   []string // uplink names, one weight field each
-	Weights []string
+	Lines       []string // uplink names, one weight field each
+	Weights     []string
+	AutoWeights bool // shares from measured speed; the weight fields are then ignored
 
 	StickyOn  bool
 	StickyMin string
@@ -51,6 +52,7 @@ func formFromConfig(c config.Config, lines []string) form {
 		UDPIdle:      strconv.Itoa(c.UDPIdleSeconds),
 		Rules:        rowsFromConfig(c.Processes, lines),
 		Reconnect:    c.Processes.ReconnectAfterOutage,
+		AutoWeights:  c.AutoWeighted(),
 	}
 	adapters := make([]*netif.Adapter, len(lines))
 	for i, name := range lines {
@@ -85,12 +87,17 @@ func (f form) toConfig() (config.Config, error) {
 		return n
 	}
 
-	// Weights: all 1 means "every line equally", saved as no weights at
-	// all, so it keeps working when a line is renamed or replaced (a new
-	// Wi-Fi adapter). Anything else is saved per line, by full name.
+	// Weights: automatic means no weights at all (the fields are ignored).
+	// Otherwise all 1 means "every line equally", also saved as no weights,
+	// so it keeps working when a line is renamed or replaced (a new Wi-Fi
+	// adapter). Anything else is saved per line, by full name.
+	c.AutoWeights = f.AutoWeights
 	c.Weights = map[string]int{}
 	allOne := true
 	for i, line := range f.Lines {
+		if f.AutoWeights {
+			break
+		}
 		w := num(line+" weight", f.Weights[i])
 		c.Weights[line] = w
 		allOne = allOne && w == 1

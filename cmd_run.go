@@ -62,8 +62,8 @@ func printStats(s engine.Stats) {
 		if i == 0 {
 			when = s.Time.Format("15:04:05")
 		}
-		fmt.Printf("%s  %-12s %-4s w%-3d down %5.1f  up %5.1f Mbit/s  tcp %4d  udp %3d  flows %6d  sticky dsts %4d\n",
-			when, l.Name, l.State, l.Weight, l.DownMbps, l.UpMbps, l.TCP, l.UDP, l.Flows, l.Sticky)
+		fmt.Printf("%s  %-12s %-4s w%-3d down %5.1f  up %5.1f Mbit/s  tcp %4d  udp %3d  flows %6d  sticky dsts %4d  pc down %5.1f\n",
+			when, l.Name, l.State, l.Weight, l.DownMbps, l.UpMbps, l.TCP, l.UDP, l.Flows, l.Sticky, l.PCDownMbps)
 	}
 	fmt.Printf("          %-12s %-4s %-4s down %5.1f  up %5.1f Mbit/s\n", "total", "", "", s.DownMbps, s.UpMbps)
 	if s.Rules != "" {

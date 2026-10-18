@@ -33,6 +33,7 @@ func newHotRig(t *testing.T, weights map[string]int) *hotRig {
 	wifi := adapter("Wi-Fi", 2, 16, "192.168.1.20/24", 40)
 	cfg := config.Default()
 	cfg.Weights = weights
+	cfg.AutoWeights = false // weights as configured (autoweight_test.go covers automatic ones)
 	ups := []*netif.Adapter{eth, wifi}
 	w, err := ResolveWeights(weights, ups)
 	if err != nil {
