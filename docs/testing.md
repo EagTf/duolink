@@ -164,7 +164,14 @@ Build with `go build`, then in an **admin** terminal:
     no AC-power restriction; Settings: no "stop if runs longer than").
     Sign out and in (or reboot): the tray starts by itself, no UAC prompt,
     no console window. `duolink autostart off` removes the task.
-11. **Rebuild while running.** With the tray running, `go build` and then
+11. **Cleanup refuses while running.** With the tray running,
+    `duolink cleanup` (admin) refuses with "duolink is running ...", and the
+    routes stay. After Quit, `duolink cleanup` works as before.
+12. **No retry loop after a late failure.** Hard to trigger on purpose; if a
+    start ever fails after "created adapter" (e.g. a self-check failure),
+    the status shows `... (see log; Start tries again)`, the toggle says
+    Start, and the log shows exactly one attempt, not one every 10 s.
+13. **Rebuild while running.** With the tray running, `go build` and then
     `duolink tray`: prints `updated duolinkw.exe` (the running copy is moved
     to `duolinkw.exe.old`) and says it's already running. After Quit and
     `duolink tray`, the new build runs.

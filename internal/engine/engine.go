@@ -57,11 +57,18 @@ func Start(o Options) (_ *Engine, err error) {
 	e := &Engine{opts: o}
 	ctx, cancel := context.WithCancel(context.Background())
 	e.cancel = cancel
+	// touched turns true just before the first change to the system (the
+	// TUN adapter). A failure before that changed nothing, so it's safe to
+	// simply try again later (e.g. Wi-Fi not connected yet at logon).
+	touched := false
 	// On failure, undo whatever was already set up. This uses the local e:
 	// `return nil, err` has already cleared the result by the time it runs.
 	defer func() {
 		if err != nil {
 			e.Stop()
+			if !touched {
+				err = retryable{err}
+			}
 		}
 	}()
 
@@ -126,6 +133,7 @@ func Start(o Options) (_ *Engine, err error) {
 	// WintunCreateAdapter in wintun.dll; tun2socks wraps the result as a gVisor
 	// link endpoint. The adapter exists as long as this process holds it.
 	wgtun.WintunTunnelType = "duolink" // shown in Device Manager instead of "WireGuard"
+	touched = true
 	dev, err := t2stun.Open(netif.TunName, 0)
 	if err != nil {
 		return nil, fmt.Errorf("create TUN adapter: %w", err)
@@ -197,6 +205,36 @@ func (e *Engine) Stop() {
 // Uplinks returns the lines this run balances over.
 func (e *Engine) Uplinks() []*netif.Adapter { return e.ups }
 
+// retryable marks a Start error that happened before anything on the system
+// changed, so retrying it costs nothing and can't disturb the network.
+type retryable struct{ error }
+
+func (r retryable) Unwrap() error { return r.error }
+
+// Retryable reports whether a failed Start changed nothing on the system, so
+// it can safely be retried automatically. Errors after that point (a failed
+// self-check, say) had already added and removed routes; retrying those in a
+// loop would make the connection blip every time.
+func Retryable(err error) bool {
+	var r retryable
+	return errors.As(err, &r)
+}
+
+const mutexName = `Global\duolink-engine`
+
+// Running reports whether an engine (the tray or `duolink run`) is running
+// on this PC. OpenMutex only opens an existing mutex, never creates one; it
+// fails with ERROR_FILE_NOT_FOUND when nothing holds it.
+func Running() bool {
+	name, _ := windows.UTF16PtrFromString(mutexName)
+	h, err := windows.OpenMutex(windows.SYNCHRONIZE, false, name)
+	if err != nil {
+		return false
+	}
+	windows.CloseHandle(h)
+	return true
+}
+
 // lock takes the PC-wide "an engine is running" mutex. A second
 // `duolink run`, or `run` while the tray is active, would create a second
 // adapter and duplicate routes, so it's refused instead.
@@ -205,7 +243,7 @@ func (e *Engine) Uplinks() []*netif.Adapter { return e.ups }
 // exists, Windows still returns a handle but sets ERROR_ALREADY_EXISTS.
 // Windows releases the mutex when the process exits, even after a crash.
 func (e *Engine) lock() error {
-	name, _ := windows.UTF16PtrFromString(`Global\duolink-engine`)
+	name, _ := windows.UTF16PtrFromString(mutexName)
 	h, err := windows.CreateMutex(nil, false, name)
 	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
 		windows.CloseHandle(h)

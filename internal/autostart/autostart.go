@@ -11,7 +11,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"os"
-
 	"os/user"
 	"path/filepath"
 	"strings"

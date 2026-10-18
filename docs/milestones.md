@@ -103,7 +103,8 @@ Status: awaiting test.
 Delivered:
 - `internal/engine`: start/stop-able engine shared by `duolink run` and the
   tray; PC-wide mutex (one engine at a time); undo in reverse on Stop or a
-  failed Start.
+  failed Start. Failures before any system change are marked retryable;
+  `duolink cleanup` refuses while an engine runs.
 - `duolink tray`: windowed copy `duolinkw.exe` (PE Subsystem = GUI) made
   and started from the console exe; no console window, logs to duolink.log.
 - Tray: state icons (green / amber / grey), per-line speeds in menu and

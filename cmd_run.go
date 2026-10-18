@@ -76,6 +76,11 @@ func cmdCleanup() error {
 	if !engine.IsAdmin() {
 		return errors.New("duolink cleanup must be run as administrator")
 	}
+	// The adapter of a running duolink isn't a leftover: removing its routes
+	// would silently stop the balancing while the tray still says Running.
+	if engine.Running() {
+		return errors.New("duolink is running (in the tray or a `duolink run`): use Pause/Quit or Ctrl+C there instead; cleanup is for leftovers after a crash")
+	}
 	all, err := netif.List()
 	if err != nil {
 		return err

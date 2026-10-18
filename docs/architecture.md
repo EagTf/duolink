@@ -145,7 +145,9 @@ with the lowest interface metric.
    not elevated → relaunch via ShellExecute "runas" (UAC)
    Localduolink-tray mutex taken → "already running" dialog, exit
    tray.Run: controller loop
-     want && not running → config.Load + engine.Start (retry every 10 s, log once per error)
+     want && not running → config.Load + engine.Start
+       failed before any change (engine.Retryable) → retry every 10 s, log once per error
+       failed after the adapter/routes were set up → stop retrying; Start tries again
      Pause → engine.Stop (routes first) ; Start → want = true
      Quit → wait for a start in progress, engine.Stop, exit
    engine OnStats every 2 s → menu rows, tooltip, icon colour

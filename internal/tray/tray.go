@@ -116,7 +116,8 @@ func (a *app) controller() {
 func (a *app) start() {
 	cfg, _, err := config.Load(a.o.ConfigPath)
 	if err != nil {
-		a.failed("Not running: config error (see log)", err)
+		// Nothing changed yet, so retrying is free; it also picks up a fixed file.
+		a.failed(fmt.Errorf("config error: %w", err), true)
 		return
 	}
 	a.mStatus.SetTitle("Starting…")
@@ -125,7 +126,7 @@ func (a *app) start() {
 	}
 	eng, err := engine.Start(engine.Options{Config: cfg, OnStats: a.onStats})
 	if err != nil {
-		a.failed("Not running: "+firstLine(err)+" (retrying)", err)
+		a.failed(err, engine.Retryable(err))
 		return
 	}
 	a.lastErr = ""
@@ -143,15 +144,44 @@ func (a *app) start() {
 	systray.SetTooltip("duolink: running")
 }
 
-// failed shows a failed start. While retries keep failing with the same
+// failed handles a failed start: it shows why, and stops the automatic
+// retries unless retrying is safe. While retries keep failing with the same
 // error, it is logged only once.
-func (a *app) failed(status string, err error) {
+func (a *app) failed(err error, canRetry bool) {
+	a.mu.Lock()
+	status, retry := afterFailure(a.want, canRetry, err)
+	if !retry {
+		a.want = false // the controller stops; the user's Start tries again
+	}
+	a.mu.Unlock()
+	if !retry {
+		a.mToggle.SetTitle("Start")
+	}
 	if err.Error() == a.lastErr {
 		err = nil
 	} else {
 		a.lastErr = err.Error()
 	}
 	a.showStopped(status, err)
+}
+
+// afterFailure decides what a failed start means for the tray: the status
+// line, and whether the controller keeps retrying.
+//   - Paused meanwhile: say Paused; nothing retries.
+//   - Failed before changing anything (fewer than 2 lines, another duolink
+//     running, a config error): retry every retryEvery; this is what makes
+//     the tray come up by itself once Wi-Fi connects after logon.
+//   - Failed after the adapter and routes were set up (self-check, say):
+//     stop. Retrying would add and remove routes every few seconds and make
+//     the connection blip each time.
+func afterFailure(want, canRetry bool, err error) (status string, retry bool) {
+	switch {
+	case !want:
+		return "Paused", false
+	case canRetry:
+		return "Not running: " + firstLine(err) + " (retrying)", true
+	}
+	return "Not running: " + firstLine(err) + " (see log; Start tries again)", false
 }
 
 // stop stops the engine if it runs. Routes go first, so normal internet is

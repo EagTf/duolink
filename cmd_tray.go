@@ -139,6 +139,19 @@ func openLog(path string) {
 	os.Stdout, os.Stderr = f, f
 	log.SetOutput(f)
 	fmt.Printf("\n===== %s duolink tray (pid %d)\n", time.Now().Format("2006-01-02 15:04:05"), os.Getpid())
+	go capLog(f)
+}
+
+// capLog keeps the log under maxLogSize while the tray runs for days, by
+// starting it over when it gets too big. Truncating a file opened with
+// O_APPEND is safe: the next write simply goes to the new end.
+func capLog(f *os.File) {
+	for range time.Tick(10 * time.Minute) {
+		if fi, err := f.Stat(); err == nil && fi.Size() > maxLogSize {
+			f.Truncate(0)
+			fmt.Printf("===== %s log restarted (was over %d bytes)\n", time.Now().Format("2006-01-02 15:04:05"), maxLogSize)
+		}
+	}
 }
 
 // cmdAutostart turns the logon task on or off, or shows it.

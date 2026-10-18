@@ -126,8 +126,9 @@ each line's state and speed, and for:
 
 - **Pause / Start**: Pause restores normal routing; Start brings duolink
   back and re-reads `duolink.json`, so you can change settings without
-  quitting. If starting fails (say Wi-Fi isn't connected yet), it keeps
-  retrying every 10 seconds.
+  quitting. If starting fails because something isn't ready yet (say Wi-Fi
+  isn't connected), it keeps retrying every 10 seconds. Other failures stop
+  and show why; click Start to try again.
 - **Start with Windows**: same as `duolink autostart on`.
 - **Open log**: `duolink.log`, which has everything `duolink run` would print.
 - **Quit**: cleans up, then exits.
@@ -138,7 +139,8 @@ whether a program gets a console. `duolink tray` keeps a copy of itself,
 it. After rebuilding duolink, run `duolink tray` once to refresh the copy.
 
 Only one duolink can run at a time: `duolink run` refuses while the tray is
-active, and the other way round.
+active, and the other way round. `duolink cleanup` also refuses while duolink runs:
+it's only for leftovers after a crash.
 
 ## Configuration: duolink.json
 

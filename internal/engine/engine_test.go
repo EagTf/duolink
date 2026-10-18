@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -18,6 +20,10 @@ func TestStartFailsCleanlyWithoutAdmin(t *testing.T) {
 	e, err := Start(Options{Config: config.Default()})
 	if err == nil || e != nil {
 		t.Fatalf("Start without admin = %v, %v; want nil and an error", e, err)
+	}
+	// It failed before touching anything, so the tray may retry it.
+	if !Retryable(err) {
+		t.Errorf("a failure before any change should be retryable: %v", err)
 	}
 }
 
@@ -46,5 +52,30 @@ func TestStatsAnyDown(t *testing.T) {
 	s.Lines = append(s.Lines, LineStats{State: "DOWN"})
 	if !s.AnyDown() {
 		t.Error("a DOWN line not reported")
+	}
+}
+
+func TestRetryable(t *testing.T) {
+	base := errors.New("need at least 2 usable uplinks")
+	r := error(retryable{base})
+	if !Retryable(r) || !errors.Is(r, base) || r.Error() != base.Error() {
+		t.Errorf("retryable wrapper: Retryable=%v Is=%v msg=%q", Retryable(r), errors.Is(r, base), r)
+	}
+	if Retryable(base) || Retryable(nil) {
+		t.Error("a plain error must not count as retryable")
+	}
+	if !Retryable(fmt.Errorf("context: %w", r)) {
+		t.Error("Retryable must see through wrapping")
+	}
+}
+
+// Running only opens an existing mutex; it must never create one (that
+// would make the next Start think another engine is running).
+func TestRunningDoesNotCreateTheMutex(t *testing.T) {
+	if Running() {
+		t.Skip("a duolink engine is running on this PC")
+	}
+	if Running() {
+		t.Error("Running() created the mutex it was only meant to look for")
 	}
 }

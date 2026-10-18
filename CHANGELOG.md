@@ -12,13 +12,16 @@ Not released yet. Entries are by milestone; see
   grey paused); tooltip and menu show per-line state and speeds every 2 s.
 - Menu: Pause/Start (Pause removes the routes), Start with Windows, Open
   log, Quit (cleans up first). Start re-reads `duolink.json`. If starting
-  fails (e.g. Wi-Fi not up yet at logon), it retries every 10 s.
+  fails before changing anything (e.g. Wi-Fi not up yet at logon), it retries
+  every 10 s; other failures wait for Start, so routes are never added and
+  removed in a loop.
 - Single instance; started without admin rights it asks for elevation (UAC).
 - `duolink autostart on|off|status`: a logon task in Task Scheduler with
   highest privileges, no battery limits and no time limit.
 - Tray output goes to `duolink.log` next to the exe (restarts beyond 1 MiB).
 - `duolink run` and the tray now share one engine (`internal/engine`); a
   PC-wide mutex stops two engines (tray + run) from running at once.
+  `duolink cleanup` refuses while one runs (it would remove live routes).
 - Console tools (netsh, schtasks, route) start without a window, so the
   tray never flashes consoles.
 - `.gitattributes`: files are checked out with LF on every machine (gofmt

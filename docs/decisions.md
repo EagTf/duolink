@@ -124,9 +124,14 @@ leave the defaults "don't start on battery", "stop on battery" and "kill
 after 72 hours", which would silently end the tray; the XML turns them off
 and sets normal priority.
 
-**Tray Start means "keep trying".** At logon Wi-Fi often connects after the
-tray starts. A failed start retries every 10 s (logging each distinct error
-once) until it works or the user pauses, instead of needing a click.
+**Tray Start means "keep trying", but only when that is harmless.** At logon
+Wi-Fi often connects after the tray starts, so a start that failed *before
+changing anything* (fewer than 2 lines, another duolink running, a config
+error) retries every 10 s, logging each distinct error once. A start that
+failed *after* the adapter and routes were set up (a failed self-check, say)
+is not retried automatically: that would add and remove routes every 10 s and
+make the connection blip each time. The engine marks the first kind
+(`engine.Retryable`); the tray shows the second as "Start tries again".
 
 **Console tools always start with CREATE_NO_WINDOW.** From the windowed
 process every netsh / schtasks call would otherwise flash a console. Their
