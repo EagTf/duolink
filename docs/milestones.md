@@ -181,10 +181,8 @@ Tested (steps in docs/testing.md, "Status window"), all passed:
 - Requested during the test: edit the settings from the window, so it's
   the full app. Planned as milestone 11.
 
-## Awaiting test
-
 ### 11. Settings in the window
-Status: awaiting test.
+Status: done.
 Delivered:
 - A Settings window (status window button, or "Settings…" in the tray
   menu) with every option in duolink.json and a short explanation per
@@ -204,7 +202,23 @@ Delivered:
 - Tests: form <-> config conversion (prefix-matched weights, rule lists,
   pins, errors in the window's words), `config.Save` (round trip, invalid
   config leaves the file untouched). Layout checked by rendering off-screen.
-Tested: (pending)
+Tested (steps in docs/testing.md, "Settings window"), all passed:
+- Opens from the status window and the tray menu with the current
+  settings; readable, nothing cut off, Tab order fine.
+- Invalid input (DOWN after 0, steam.exe in two lists, a pin to "phone")
+  showed red errors in the window's words; duolink.json untouched and no
+  restart.
+- Save and apply (stickiness 15 min): saved, restarted in about a second,
+  the log showed the new value.
+- Weights 2:1 saved per line; back to 1:1 saved as `{}`.
+- Saved while paused: applied on Start, no restart before.
+- Reset to defaults filled the form without saving; Cancel and X discard
+  edits; reopening shows the saved settings.
+- Broken duolink.json: tray showed the config error and retried; Settings
+  showed the defaults with a red note; Save replaced the file and duolink
+  started by itself.
+- Suggested during the test: friendlier per-app rule editing (file picker,
+  line dropdown for pins). Noted in docs/action_items.md.
 
 ## Planned
 
@@ -214,5 +228,5 @@ Tested: (pending)
 | 8 | Per-process rules via `GetExtendedTcpTable` / `GetExtendedUdpTable` (flow's local port → PID → exe): `sticky_exempt` (default `["steam.exe"]`), `pin` (process → line, with fallback when that line is down), `exclude` (not balanced). Configured in duolink.json | done (partially tested) |
 | 9 | System tray app: `duolink tray`, no console, Start/Pause, speeds, Quit with cleanup, single instance, autostart via Task Scheduler with highest privileges | done (logon start pending) |
 | 10 | Small window opened from the tray; X hides it to the tray, only Quit exits | done |
-| 11 | Settings in the window, so it's the full app: edit everything in duolink.json (weights, stickiness, health checks, per-app rules) with explanations, validation before saving, and Apply (restarts duolink with the new settings) | awaiting test |
+| 11 | Settings in the window, so it's the full app: edit everything in duolink.json (weights, stickiness, health checks, per-app rules) with explanations, validation before saving, and Apply (restarts duolink with the new settings) | done |
 | later | Metered/phone lines with a data cap; hot-plugging uplinks; automatic weights from passive throughput measurement; IPv6 | ideas |

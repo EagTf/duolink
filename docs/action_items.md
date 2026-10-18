@@ -78,6 +78,11 @@
 
 ## Ideas
 
+- Settings window, per-app rules: friendlier editing. An "Add program…"
+  button with a file picker for the .exe (or type the name), and for pins a
+  dropdown of the connected lines instead of typing `= eth`. Suggested
+  during the milestone 11 test.
+
 - Status window: remember its position; per-monitor DPI (it uses the
   system DPI, so on a second monitor with a different scale Windows
   stretches it); a speed graph.
