@@ -1,0 +1,75 @@
+# Checks every pull request and every push to main. The "test" job is a
+# required status check on main: nothing merges unless it passes.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Read-only token: the workflow only reads the code.
+permissions:
+  contents: read
+
+# A newer push to the same PR cancels the older run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test
+    # duolink is Windows-only (Wintun, iphlpapi, Task Scheduler), so are its tests.
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      # Actions are pinned to full commit SHAs (tag in the comment), so a
+      # moved or hijacked tag can't change what runs here. Dependabot
+      # proposes updates.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        shell: bash
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "These files need gofmt:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # The runner is elevated; tests that would change routing when
+      # elevated (engine.Start) skip themselves, the rest only read.
+      - name: go test
+        run: go test -count=1 ./...
+
+      - name: go build
+        run: go build
+
+  govulncheck:
+    name: govulncheck
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # Known vulnerabilities in our code paths, Go's standard library and
+      # the modules we use (only ones our code actually reaches are reported).
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...

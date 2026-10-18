@@ -137,6 +137,15 @@ make the connection blip each time. The engine marks the first kind
 process every netsh / schtasks call would otherwise flash a console. Their
 output still comes back through pipes, and the CLI looks the same.
 
+**`main` is protected; CI runs on Windows.** Only pull requests that pass
+the `test` job (gofmt, vet, test, build) and are up to date with `main` can
+change it, and the rule has no bypass, not even for the owner: a solo
+project gets the most from "nothing untested reaches main". No required
+approvals, since GitHub doesn't let you approve your own PR. CI runs on
+Windows because the code calls Windows APIs; the runner is elevated, so the
+one test that would change routing (`engine.Start`) skips itself there.
+Actions are pinned to commit SHAs so a moved tag can't change what runs.
+
 **`main` at the root + `internal/` packages, tests beside the code.** One flat
 package was fine up to milestone 8, but the tray app (milestone 9) adds a
 second user interface over the same engine. duolink is one binary (the UI is
