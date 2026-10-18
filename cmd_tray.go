@@ -19,6 +19,7 @@ import (
 	"github.com/eagtf/duolink/internal/engine"
 	"github.com/eagtf/duolink/internal/guiexe"
 	"github.com/eagtf/duolink/internal/tray"
+	"github.com/eagtf/duolink/internal/window"
 )
 
 const maxLogSize = 1 << 20 // duolink.log starts over beyond 1 MiB
@@ -91,6 +92,11 @@ func runTray(exe, cfgPath string, args []string) {
 	if ok, err := tray.SingleInstance(); !ok {
 		if err != nil {
 			fmt.Println("error:", err)
+		}
+		// Bring the running tray's window up instead of a dialog.
+		if window.ShowExisting() {
+			fmt.Println("another duolink tray is already running; showed its window")
+			return
 		}
 		fmt.Println("another duolink tray is already running; exiting")
 		tray.Fatal("duolink is already running in the tray.")

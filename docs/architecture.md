@@ -143,17 +143,20 @@ with the lowest interface metric.
  duolinkw.exe tray (no console):
    stdout/stderr/log → duolink.log
    not elevated → relaunch via ShellExecute "runas" (UAC)
-   Localduolink-tray mutex taken → "already running" dialog, exit
+   Local\duolink-tray mutex taken → show the running tray's window, exit
+                                     (dialog only if that window isn't found)
    tray.Run: controller loop
      want && not running → config.Load + engine.Start
        failed before any change (engine.Retryable) → retry every 10 s, log once per error
        failed after the adapter/routes were set up → stop retrying; Start tries again
      Pause → engine.Stop (routes first) ; Start → want = true
      Quit → wait for a start in progress, engine.Stop, exit
-   engine OnStats every 2 s → menu rows, tooltip, icon colour
+   engine OnStats every 2 s → menu rows, tooltip, icon colour, window
+   engine OnEvent (DOWN, back UP, ...) + tray start/pause/failure → window events
+   left click / "Open duolink" → window.Show ; X hides it, only Quit exits
 ```
 
-The engine takes the `Globalduolink-engine` mutex for as long as it runs,
+The engine takes the `Global\duolink-engine` mutex for as long as it runs,
 so `duolink run` and the tray (or two runs) can never both own the routes.
 Every start re-reads `duolink.json`, so Pause → edit → Start applies changes.
 Console tools run from the windowed process would each open a console
@@ -180,11 +183,12 @@ Weights stay as name → number until `run` knows the adapters, then
 | `internal/balance` | WRR, stickiness, health checks, failed-dial tracking, line state transitions, per-app rules, weight resolution |
 | `internal/forward` | the netstack `TransportHandler`: flow filtering, loop guard, TCP/UDP copy, per-uplink counters |
 | `internal/tray` | the tray app (fyne.io/systray): menu, tooltip, state icons, Pause/Start controller with retry, single-instance mutex |
+| `internal/window` | the status window: plain Win32 (user32/gdi32), own message loop thread, visual styles via an activation context, DPI awareness, `Format` for its text |
 | `internal/guiexe` | the windowed copy: duolinkw.exe = duolink.exe with the PE Subsystem field set to GUI |
 | `internal/autostart` | the logon Task Scheduler task (XML, `schtasks`) |
 | `internal/winexec` | runs console tools (netsh, schtasks, route) with `CREATE_NO_WINDOW` |
 
-Dependencies only point down: `main` → `tray` → `engine` → `forward` → `balance` → `netif`, `config`; `engine` also uses `route`, `forward` uses `procs` and `route`, `route` and `autostart` use `winexec`. Tests sit next to the code they test (`*_test.go` in the same package) and need neither admin rights nor network changes.
+Dependencies only point down: `main` → `tray` → `window` → `engine` → `forward` → `balance` → `netif`, `config`; `engine` also uses `route`, `forward` uses `procs` and `route`, `route` and `autostart` use `winexec`. Tests sit next to the code they test (`*_test.go` in the same package) and need neither admin rights nor network changes.
 
 ## Dependencies
 
