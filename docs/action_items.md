@@ -13,6 +13,10 @@
 - [ ] Crash test: `duolink run`, then `taskkill /f /im duolink.exe`, then
   `duolink cleanup`. Confirm whether the Wintun adapter and its routes vanish
   with the process (expected) or `cleanup` reports a leftover adapter.
+- [ ] Retry on the other line (milestone 13): during a download, unplug
+  router B's DSL cable while Wi-Fi stays connected. Expect "Connections
+  saved by trying the other line" in the window, then Wi-Fi DOWN. Also
+  2:1 weights: the TCP column about 2:1.
 - [ ] Single-line runs: `--weights eth=1,wifi=0` and `--weights eth=0,wifi=1`.
 
 ## Known issues
@@ -57,8 +61,11 @@
 - If every line fails its health check, flows are spread over all lines
   instead of refused. Deliberate (probe targets may be blocked), but worth
   revisiting with instant failover.
-- TCP half-close has no timeout: if one side sends FIN and the other never
-  does, the flow lingers until TCP keepalive kills it.
+- Least-busy picking counts TCP flows only. A long UDP stream (QUIC video,
+  a game) doesn't make its line look busier. Milestone 14's measured speed
+  covers part of that.
+- A retried dial after a timeout makes the app wait up to 20 s (10 s per
+  line). Only flows whose first line gave no answer at all pay that.
 - ICMP (ping, traceroute) to internet addresses doesn't work while running.
 - Binary is about 14 MB, mostly gVisor.
 - Stats print to the console every 2 s, which floods the scrollback on long

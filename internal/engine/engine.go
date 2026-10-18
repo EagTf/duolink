@@ -138,7 +138,7 @@ func Start(o Options) (_ *Engine, err error) {
 	// link endpoint. The adapter exists as long as this process holds it.
 	wgtun.WintunTunnelType = "duolink" // shown in Device Manager instead of "WireGuard"
 	touched = true
-	dev, err := t2stun.Open(netif.TunName, 0)
+	dev, err := t2stun.Open(netif.TunName, route.TunMTU) // the netstack's MTU; Windows' side is set in ConfigureTUN
 	if err != nil {
 		return nil, fmt.Errorf("create TUN adapter: %w", err)
 	}

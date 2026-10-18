@@ -263,6 +263,39 @@ address is followed, pins stay on their line, no routing loop
 (`duolink list --ip`), and the Settings rules list adds, edits and removes
 rules.
 
+### 13. Smarter balancing
+Status: done (retry on the other line not tested yet).
+Delivered:
+- Least-busy picking: each line counts its open TCP flows, and a new flow
+  goes to the lowest open / weight; ties go to smooth weighted
+  round-robin, so with nothing open the order is as before. A flow stops
+  counting at its first half-close. Stickiness and per-app rules are
+  unchanged; least-busy replaces the round-robin step only.
+- Retry on another line: a TCP or UDP dial that gets no answer
+  (unreachable, timeout) is repeated through the next line; refusals
+  aren't. Count shown as "Connections saved by trying the other line".
+- Broken-line cooldown: network down / unreachable / address gone through
+  a line keeps new flows off it for 15 s and probes it at once (log: `dial
+  to ... failed (...); no new flows on it for 15s, probing it`). A good
+  probe ends it. Not treated as an outage.
+- MTU 9000 on the TUN: netstack and Windows' side (`set subinterface ...
+  mtu=9000 store=active`, a warning if it fails).
+- Pooled 128 KB copy buffers; a half-closed TCP flow ends after 2 minutes
+  without data. TCP keepalive on the netstack side was already on
+  (tun2socks sets it).
+- Tests: least-busy order and weights, Done counting once, skipping tried
+  lines (sticky entry moves, pin falls back), cooldown (one log line, probe
+  kicked, all-cooling fallback, ended by time or probe), dial error classes,
+  the half-close idle timeout.
+Tested: a Steam download reached about 50 Mbit/s over both lines (a new
+best), with visibly less CPU for duolinkw.exe than before. The log shows
+the TUN's MTU set to 9000 with no warning. Wi-Fi disconnected and
+reconnected during the download: DOWN, back UP after 11 s, 2 destinations
+rebalanced and 29 download connections reconnected onto both lines. Not
+tested yet: retry on the other line (needs a line that stays connected but
+loses internet; an adapter disconnect marks the line DOWN before any dial
+fails) and 2:1 weights with least-busy picking.
+
 ## Planned
 
 | # | Milestone | Status |
@@ -273,7 +306,7 @@ rules.
 | 10 | Small window opened from the tray; X hides it to the tray, only Quit exits | done |
 | 11 | Settings in the window, so it's the full app: edit everything in duolink.json (weights, stickiness, health checks, per-app rules) with explanations, validation before saving, and Apply (restarts duolink with the new settings) | done |
 | 12 | Recovery after failover (rebalance destinations that moved during an outage), hot-plug (lines follow adapters that come, go or change address), friendlier per-app rules (list, file picker, line dropdown) | done |
-| 13 | Smarter balancing: retry a failed dial on another line, least-busy picking, MTU 9000 on the TUN | planned |
+| 13 | Smarter balancing: retry a failed dial on another line, least-busy picking, MTU 9000 on the TUN | done (retry untested) |
 | 14 | Automatic weights from measured speed, per-adapter total traffic | planned |
 | 15 | Auto-pause with fewer than two working lines; control the running tray from the CLI | planned |
 | 16 | IPv6 | planned |
@@ -314,9 +347,9 @@ well stays as it is, and every new feature has to work with it:
 - **MTU 9000 on the TUN** (Windows side and netstack). TUN traffic never
   leaves the PC, and bigger packets mean far fewer trips through the
   netstack. Measure CPU per Mbit/s before and after.
-- Pooled copy buffers, and TCP keepalive on the netstack side of each flow,
-  so a flow whose peer vanished doesn't linger (also covers the
-  half-close-without-timeout item in action_items).
+- Pooled copy buffers, and an idle timeout for half-closed flows (covers the
+  half-close item in action_items). TCP keepalive on the netstack side
+  turned out to be on already.
 
 ### 14. Automatic weights
 - Each line's weight follows its measured speed: the peak throughput it

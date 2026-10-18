@@ -12,8 +12,10 @@ lines, a Steam download that opens several connections can reach about
 ## What it does, and what it doesn't
 
 - **Per-flow load balancing, not bonding.** Each new TCP connection or UDP
-  flow goes out through one line, picked by weighted round-robin. A flow
-  stays on its line until it ends.
+  flow goes out through one line: the least busy one, counting the
+  connections each line has open (weights shift the share). A flow stays on
+  its line until it ends. If a line gives no answer when a connection
+  starts, duolink tries the other line, so the app doesn't see an error.
 - **One connection = one line.** A single download over one connection never
   gets faster than the line it's on. You gain when an app uses many
   connections in parallel: Steam, browsers, download managers, torrent clients.

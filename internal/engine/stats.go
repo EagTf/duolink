@@ -26,6 +26,7 @@ type Stats struct {
 	DownMbps float64
 	UpMbps   float64
 	Rules    string // per-app rule counts, "" if none
+	Retried  int64  // TCP flows that connected only on a second line
 }
 
 // AnyDown reports whether a line that should carry traffic is DOWN.
@@ -53,7 +54,7 @@ func (e *Engine) sampleStats(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		s := Stats{Time: time.Now(), Rules: e.fwd.RuleSummary()}
+		s := Stats{Time: time.Now(), Rules: e.fwd.RuleSummary(), Retried: e.fwd.Retried()}
 		sticky := e.bal.StickyCount()
 		seen := map[*netif.Adapter][2]int64{}
 		// The current lines: they change when adapters come, go or move.

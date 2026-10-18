@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -49,6 +48,7 @@ type Forwarder struct {
 
 	loops    atomic.Int64
 	loopOnce sync.Once
+	retried  atomic.Int64 // TCP flows that connected on a second line
 
 	// Process rules (milestone 8). procs is nil when no rules are configured,
 	// so no lookups happen at all.
@@ -173,6 +173,17 @@ func (f *Forwarder) guard(c net.Conn, fn func()) {
 	fn()
 }
 
+// halfCloseIdle ends a flow that one side finished sending on (FIN) if the
+// other direction then carries nothing for this long. Without it, a peer
+// that never sends its own FIN would keep the flow open until keepalive gives
+// up. Every packet restarts the timer, so a long reply still finishes.
+// A variable so tests can shorten it.
+var halfCloseIdle = 2 * time.Minute
+
+// copyBufs are the buffers of the copy loops. Pooled: each flow needs two,
+// and a download app opens many flows.
+var copyBufs = sync.Pool{New: func() any { b := make([]byte, 128<<10); return &b }}
+
 func (f *Forwarder) tcp(c adapter.TCPConn) {
 	defer c.Close()
 	src, dst := endpoints(c.ID())
@@ -180,40 +191,96 @@ func (f *Forwarder) tcp(c adapter.TCPConn) {
 		return
 	}
 	rule := f.ruleFor(false, src)
-	up, duringOutage := f.bal.PickFlow(dst.Addr(), rule)
-	if up == nil {
-		return // no healthy uplink: closing sends a RST to the app
+	fl, out := f.dialTCP(dst, rule)
+	if out == nil {
+		return // no line could connect: closing sends a RST to the app
 	}
-	st := f.statsFor(up)
-	st.flows.Add(1)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	out, err := up.DialTCP4(ctx, dst.String())
-	cancel()
-	f.bal.NoteDial(up, dst, err)
-	if err != nil {
-		return
-	}
+	defer fl.Done()
 	defer out.Close()
+	st := f.statsFor(fl.Adapter)
+	st.flows.Add(1)
 	st.tcp.Add(1)
 	defer st.tcp.Add(-1)
 	// A download app's connection placed during an outage is closed when the
 	// line comes back, so the app reconnects over all lines (OnLineUp).
-	if duringOutage && rule.Kind == balance.RuleStickyExempt && f.reconnect {
+	if fl.DuringOutage && rule.Kind == balance.RuleStickyExempt && f.reconnect {
 		defer f.trackOutageFlow(func() { c.Close(); out.Close() })()
 	}
 
 	// Copy both directions. When one side finishes sending, pass the
 	// half-close (FIN) on with CloseWrite so the other direction can finish.
+	// From then on the flow no longer counts as busy for picking lines
+	// (Done), and the other direction has to keep moving (halfCloseIdle).
+	var half atomic.Bool
+	finish := func(to net.Conn) { // the direction into to has ended
+		closeWrite(to)
+		fl.Done()
+		half.Store(true)
+		to.SetReadDeadline(time.Now().Add(halfCloseIdle)) // the other direction reads from to
+	}
 	done := make(chan struct{})
 	go func() {
-		io.Copy(countWriter{out, &st.tx}, c)
-		closeWrite(out)
+		pumpTCP(out, c, &st.tx, &half)
+		finish(out)
 		close(done)
 	}()
-	io.Copy(countWriter{c, &st.rx}, out)
-	closeWrite(c)
+	pumpTCP(c, out, &st.rx, &half)
+	finish(c)
 	<-done
+}
+
+// dialTCP connects to dst through a line picked for rule. If a line gets no
+// answer at all (unreachable, timeout), the same flow is dialed through the
+// next line instead of failing the app's connection: during an outage, until
+// the probe marks the line DOWN, flows still get through. A refusal is an
+// answer from the destination, so it isn't retried. It returns the flow and
+// the connection, or a nil connection if no line could connect.
+func (f *Forwarder) dialTCP(dst netip.AddrPort, rule balance.Rule) (*balance.Flow, net.Conn) {
+	var tried []*netif.Adapter
+	for {
+		fl := f.bal.PickFlow(dst.Addr(), rule, tried)
+		if fl.Adapter == nil {
+			return fl, nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		out, err := fl.Adapter.DialTCP4(ctx, dst.String())
+		cancel()
+		f.bal.NoteDial(fl.Adapter, dst, err)
+		if err == nil {
+			if len(tried) > 0 {
+				f.retried.Add(1)
+			}
+			return fl, out
+		}
+		fl.Done()
+		if !balance.RetryOnOtherLine(err) {
+			return fl, nil
+		}
+		tried = append(tried, fl.Adapter)
+	}
+}
+
+// pumpTCP copies src to dst and counts the bytes in n. Once the other
+// direction has finished (half), every read must come within halfCloseIdle.
+func pumpTCP(dst, src net.Conn, n *atomic.Int64, half *atomic.Bool) {
+	bp := copyBufs.Get().(*[]byte)
+	defer copyBufs.Put(bp)
+	buf := *bp
+	for {
+		k, err := src.Read(buf)
+		if k > 0 {
+			if _, werr := dst.Write(buf[:k]); werr != nil {
+				return
+			}
+			n.Add(int64(k))
+		}
+		if err != nil {
+			return
+		}
+		if half.Load() {
+			src.SetReadDeadline(time.Now().Add(halfCloseIdle))
+		}
+	}
 }
 
 func (f *Forwarder) udp(c adapter.UDPConn) {
@@ -222,31 +289,44 @@ func (f *Forwarder) udp(c adapter.UDPConn) {
 	if !f.accept(src, dst) {
 		return
 	}
-	up := f.bal.PickFor(dst.Addr(), f.ruleFor(true, src))
-	if up == nil {
-		return
-	}
-	st := f.statsFor(up)
-	st.flows.Add(1)
-
 	// The netstack hands us one conn per (app src, dst) pair, and we give it
 	// one connected socket on one uplink, so the flow stays pinned to that
 	// uplink until it goes idle.
 	// A connected UDP socket sends nothing yet, so success proves nothing
-	// about the line; only errors (e.g. no route) are reported.
-	out, err := up.DialUDP4(context.Background(), dst.String())
-	if err != nil {
-		f.bal.NoteDial(up, dst, err)
-		return
+	// about the line; only errors (e.g. no route) are reported, and the next
+	// line is tried. UDP flows don't count as busy for picking: many are
+	// one-off DNS lookups.
+	rule := f.ruleFor(true, src)
+	var tried []*netif.Adapter
+	var up *netif.Adapter
+	var out net.Conn
+	for out == nil {
+		fl := f.bal.PickFlow(dst.Addr(), rule, tried)
+		fl.Done()
+		if up = fl.Adapter; up == nil {
+			return
+		}
+		var err error
+		if out, err = up.DialUDP4(context.Background(), dst.String()); err != nil {
+			f.bal.NoteDial(up, dst, err)
+			if !balance.RetryOnOtherLine(err) {
+				return
+			}
+			tried = append(tried, up)
+		}
 	}
 	defer out.Close()
+	st := f.statsFor(up)
+	st.flows.Add(1)
 	st.udp.Add(1)
 	defer st.udp.Add(-1)
 
 	var last atomic.Int64 // unix nanos of last packet in either direction
 	last.Store(time.Now().UnixNano())
 	pump := func(dst, src net.Conn, n *atomic.Int64) {
-		buf := make([]byte, 65535)
+		bp := copyBufs.Get().(*[]byte)
+		defer copyBufs.Put(bp)
+		buf := *bp
 		for {
 			src.SetReadDeadline(time.Now().Add(f.udpIdle))
 			k, err := src.Read(buf)
@@ -275,17 +355,6 @@ func (f *Forwarder) udp(c adapter.UDPConn) {
 	<-done
 }
 
-type countWriter struct {
-	w io.Writer
-	n *atomic.Int64
-}
-
-func (cw countWriter) Write(p []byte) (int, error) {
-	n, err := cw.w.Write(p)
-	cw.n.Add(int64(n))
-	return n, err
-}
-
 func closeWrite(c net.Conn) {
 	if cw, ok := c.(interface{ CloseWrite() error }); ok {
 		cw.CloseWrite()
@@ -306,6 +375,10 @@ func (f *Forwarder) Counters(a *netif.Adapter) Counters {
 	st := f.statsFor(a)
 	return Counters{Rx: st.rx.Load(), Tx: st.tx.Load(), TCP: st.tcp.Load(), UDP: st.udp.Load(), Flows: st.flows.Load()}
 }
+
+// Retried returns how many TCP flows connected only after their first line
+// gave no answer and the next line was tried.
+func (f *Forwarder) Retried() int64 { return f.retried.Load() }
 
 // Loops returns how many flows were dropped as routing loops. The startup
 // self-check compares it before and after dialing through every uplink.
