@@ -224,12 +224,13 @@ const mutexName = `Global\duolink-engine`
 
 // Running reports whether an engine (the tray or `duolink run`) is running
 // on this PC. OpenMutex only opens an existing mutex, never creates one; it
-// fails with ERROR_FILE_NOT_FOUND when nothing holds it.
+// fails with ERROR_FILE_NOT_FOUND when nothing holds it. Any other failure
+// (e.g. access denied) means the mutex exists, so an engine is running.
 func Running() bool {
 	name, _ := windows.UTF16PtrFromString(mutexName)
 	h, err := windows.OpenMutex(windows.SYNCHRONIZE, false, name)
 	if err != nil {
-		return false
+		return !errors.Is(err, windows.ERROR_FILE_NOT_FOUND)
 	}
 	windows.CloseHandle(h)
 	return true

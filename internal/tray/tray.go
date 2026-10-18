@@ -41,7 +41,7 @@ type app struct {
 	stopped bool           // Quit was chosen
 
 	kick    chan struct{} // wake the controller now
-	lastErr string        // last start error, so repeated retries log it once
+	lastErr string        // last start error, so repeated retries log it once (guarded by mu)
 	startMu sync.Mutex    // held while a start is in progress, so Quit can wait for it
 
 	icons                     map[string][]byte
@@ -121,7 +121,10 @@ func (a *app) start() {
 		return
 	}
 	a.mStatus.SetTitle("Starting…")
-	if a.lastErr == "" { // not a quiet retry of the same failure
+	a.mu.Lock()
+	quiet := a.lastErr != "" // a retry of the same failure stays quiet
+	a.mu.Unlock()
+	if !quiet {
 		fmt.Printf("\n=== %s starting\n", time.Now().Format("2006-01-02 15:04:05"))
 	}
 	eng, err := engine.Start(engine.Options{Config: cfg, OnStats: a.onStats})
@@ -129,8 +132,8 @@ func (a *app) start() {
 		a.failed(err, engine.Retryable(err))
 		return
 	}
-	a.lastErr = ""
 	a.mu.Lock()
+	a.lastErr = ""
 	if !a.want || a.stopped { // paused or quit while starting
 		a.mu.Unlock()
 		eng.Stop()
@@ -153,14 +156,14 @@ func (a *app) failed(err error, canRetry bool) {
 	if !retry {
 		a.want = false // the controller stops; the user's Start tries again
 	}
+	if err.Error() == a.lastErr {
+		err = nil // already logged
+	} else {
+		a.lastErr = err.Error()
+	}
 	a.mu.Unlock()
 	if !retry {
 		a.mToggle.SetTitle("Start")
-	}
-	if err.Error() == a.lastErr {
-		err = nil
-	} else {
-		a.lastErr = err.Error()
 	}
 	a.showStopped(status, err)
 }
@@ -205,6 +208,9 @@ func (a *app) clicks() {
 			a.mu.Lock()
 			a.want = !a.want
 			want := a.want
+			if want {
+				a.lastErr = "" // an explicit Start is always logged in full
+			}
 			a.mu.Unlock()
 			if want {
 				a.mToggle.SetTitle("Pause")
