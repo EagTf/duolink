@@ -2,20 +2,37 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
+
+// dialFailuresToProbe is how many consecutive failed dials, to different
+// destinations, make us probe a line at once instead of waiting for the
+// next interval.
+const dialFailuresToProbe = 2
 
 type uplink struct {
 	a       *Adapter
 	weight  int
 	healthy atomic.Bool
 	current int // smooth WRR state, guarded by balancer.mu
+
+	// kick asks this line's health loop to probe now. It carries what
+	// triggered the probe, for the log. Buffered 1: one pending request is enough.
+	kick chan string
+
+	mu       sync.Mutex       // guards the fields below
+	failDsts []netip.AddrPort // consecutive failed dials, one per destination IP
+	issue    string           // adapter problem seen by the watcher; "" = none
 }
 
 type stickyEntry struct {
@@ -34,7 +51,10 @@ type balancer struct {
 	sticky    map[netip.Addr]*stickyEntry
 	allDown   bool // for printing the fallback warning once per outage
 
-	now func() time.Time // replaceable in tests
+	// Replaceable in tests.
+	now   func() time.Time
+	probe func(ctx context.Context, a *Adapter) error
+	logf  func(format string, args ...any)
 }
 
 func newBalancer(ups []*Adapter, weights map[*Adapter]int, cfg *Config) *balancer {
@@ -43,9 +63,13 @@ func newBalancer(ups []*Adapter, weights map[*Adapter]int, cfg *Config) *balance
 		stickyTTL: cfg.stickyTTL(),
 		sticky:    map[netip.Addr]*stickyEntry{},
 		now:       time.Now,
+		logf: func(format string, args ...any) {
+			fmt.Printf(ts()+" "+format+"\n", args...)
+		},
 	}
+	b.probe = func(ctx context.Context, a *Adapter) error { return probe(ctx, a, b.health) }
 	for _, a := range ups {
-		l := &uplink{a: a, weight: weights[a]}
+		l := &uplink{a: a, weight: weights[a], kick: make(chan string, 1)}
 		l.healthy.Store(true)
 		b.links = append(b.links, l)
 	}
@@ -98,7 +122,7 @@ func (b *balancer) candidates() []*uplink {
 	}
 	if !b.allDown && len(weighted) > 0 {
 		b.allDown = true
-		fmt.Println(ts(), "every uplink failed its health check; spreading flows over all of them anyway")
+		b.logf("every uplink is DOWN; spreading flows over all of them anyway")
 	}
 	return weighted
 }
@@ -194,27 +218,161 @@ func (b *balancer) run(ctx context.Context) {
 	}
 }
 
+// healthLoop probes l on its interval, or at once when something kicks it
+// (failed dials, adapter reconnected). It is the only caller of check for l,
+// so probes on one line never overlap.
 func (b *balancer) healthLoop(ctx context.Context, l *uplink) {
 	for {
 		wait := time.Duration(b.health.IntervalSeconds) * time.Second
 		if !l.healthy.Load() {
 			wait = time.Duration(b.health.DownIntervalSeconds) * time.Second
 		}
+		why := ""
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(wait):
+		case why = <-l.kick:
 		}
-		err := probe(ctx, l.a, b.health)
-		if ctx.Err() != nil {
-			return
+		b.check(ctx, l, why)
+	}
+}
+
+// check probes l and applies the result. why is what triggered the probe ("" =
+// the regular interval). Only a successful probe ever brings a line back UP.
+func (b *balancer) check(ctx context.Context, l *uplink, why string) {
+	err := b.probe(ctx, l.a)
+	if ctx.Err() != nil {
+		return
+	}
+	if err != nil {
+		reason := "probe failed: " + err.Error()
+		if why != "" {
+			reason = why + ", then " + reason
 		}
-		was := l.healthy.Swap(err == nil)
-		switch {
-		case was && err != nil:
-			fmt.Printf("%s %s is DOWN (%v): no new flows until it recovers\n", ts(), l.a.Name, err)
-		case !was && err == nil:
-			fmt.Printf("%s %s is back UP\n", ts(), l.a.Name)
+		b.setDown(l, reason)
+		return
+	}
+	switch {
+	case !l.healthy.Swap(true):
+		b.logf("%s is back UP", l.a.Name)
+	case why != "":
+		b.logf("%s: %s, but the probe succeeded: stays UP", l.a.Name, why)
+	}
+}
+
+// setDown marks l DOWN and logs why, if it was UP.
+func (b *balancer) setDown(l *uplink, reason string) {
+	if l.healthy.Swap(false) {
+		b.logf("%s is DOWN (%s): no new flows until it recovers", l.a.Name, reason)
+	}
+}
+
+// kickProbe asks l's health loop to probe now. If a request is already
+// pending, that one covers this too.
+func (b *balancer) kickProbe(l *uplink, why string) {
+	select {
+	case l.kick <- why:
+	default:
+	}
+}
+
+// Dial outcomes, as evidence about the line (not the destination).
+const (
+	dialLineOK     = iota // connected, or the remote side answered with a refusal
+	dialLineFailed        // no answer at all: timeout, unreachable, no route, ...
+	dialIgnored           // says nothing about the line (we cancelled it)
+)
+
+// dialOutcome classifies a dial error. A refused or reset connection means a
+// packet came back from the destination, so the line works even though the
+// site doesn't. Treating those as line failures would let a dead website take
+// down a healthy line.
+func dialOutcome(err error) int {
+	switch {
+	case err == nil:
+		return dialLineOK
+	case errors.Is(err, context.Canceled):
+		return dialIgnored
+	case errors.Is(err, windows.WSAECONNREFUSED), errors.Is(err, windows.WSAECONNRESET):
+		return dialLineOK
+	}
+	return dialLineFailed
+}
+
+// noteDial records the result of a real-traffic dial through a. After
+// dialFailuresToProbe consecutive failures to different destination IPs it
+// kicks an immediate probe. The probe, not the dials, decides whether the
+// line goes DOWN: dials can fail because the destinations are down.
+// Several failures to the same IP count once, so retries to one dead server
+// never trigger a probe.
+func (b *balancer) noteDial(a *Adapter, dst netip.AddrPort, err error) {
+	l := b.link(a)
+	if l == nil {
+		return
+	}
+	outcome := dialOutcome(err)
+	if outcome == dialIgnored {
+		return
+	}
+	l.mu.Lock()
+	if outcome == dialLineOK {
+		l.failDsts = nil
+		l.mu.Unlock()
+		return
+	}
+	if !slices.ContainsFunc(l.failDsts, func(d netip.AddrPort) bool { return d.Addr() == dst.Addr() }) {
+		l.failDsts = append(l.failDsts, dst)
+	}
+	why := ""
+	if len(l.failDsts) >= dialFailuresToProbe {
+		var s []string
+		for _, d := range l.failDsts {
+			s = append(s, d.String())
+		}
+		why = fmt.Sprintf("%d failed dials in a row (%s)", len(l.failDsts), strings.Join(s, ", "))
+		l.failDsts = nil
+	}
+	l.mu.Unlock()
+	if why != "" {
+		b.kickProbe(l, why)
+	}
+}
+
+// setAdapterIssue applies what the adapter watcher sees for l's adapter.
+// A new problem marks the line DOWN at once, with no probe: a disconnected
+// adapter can't carry anything. When the problem clears, a probe is kicked,
+// and that probe decides whether the line comes back UP.
+func (b *balancer) setAdapterIssue(l *uplink, issue string) {
+	l.mu.Lock()
+	prev := l.issue
+	l.issue = issue
+	l.mu.Unlock()
+	switch {
+	case issue == prev:
+	case issue != "":
+		if l.healthy.Load() {
+			b.setDown(l, issue)
+		} else {
+			b.logf("%s: %s", l.a.Name, issue)
+		}
+	default:
+		b.logf("%s: adapter is connected again; probing", l.a.Name)
+		b.kickProbe(l, "adapter reconnected")
+	}
+}
+
+// onAdapterChange re-reads the adapters and updates every weighted line.
+// Called by watchAdapters after Windows reports a change.
+func (b *balancer) onAdapterChange() {
+	all, err := listAdapters()
+	if err != nil {
+		b.logf("could not re-read adapters after a change: %v", err)
+		return
+	}
+	for _, l := range b.links {
+		if l.weight > 0 {
+			b.setAdapterIssue(l, adapterIssue(l.a, findByLUID(all, l.a.LUID)))
 		}
 	}
 }

@@ -57,6 +57,44 @@ if something breaks your connection.
    Expect `Ethernet is DOWN`, new flows only on Wi-Fi, the download continues.
    Replug: `Ethernet is back UP` within about 4 s.
 
+## Instant failover
+
+Run `duolink run --for 10m` and keep a download going (Steam, or several
+browser downloads) so both lines carry traffic. Watch the log lines between
+the stats.
+
+1. **Unplug Ethernet.** Within about 1 s: `Ethernet is DOWN (adapter
+   disconnected)`. New flows go to Wi-Fi only (the `flows` column stops
+   growing on Ethernet); the download continues.
+2. **Plug it back in.** Expect `Ethernet: adapter is connected again;
+   probing`, then `Ethernet is back UP` once DHCP is done (a few seconds).
+   Until the probe succeeds the line stays DOWN.
+3. **Disable the Wi-Fi adapter** (Settings → Network, or
+   `Disable-NetAdapter -Name 'Wi-Fi'` in another admin window), then
+   re-enable it. Same as 1–2 for Wi-Fi; disabling may log `adapter removed`
+   instead of `disconnected`.
+4. **Disconnect Wi-Fi from the network** (pick "Disconnect" in the Wi-Fi
+   menu) and reconnect. Same pattern.
+5. **Internet dead behind a working LAN** (the case probes and dials catch,
+   not the watcher): unplug the *router's* WAN/DSL cable, keep the PC's
+   cable in. Expect within about 10–20 s either `... 2 failed dials in a
+   row (...), then probe failed ...` or a regular `probe failed`. Plug the
+   DSL back in: `back UP` within a few seconds after the line syncs.
+6. **Dead websites must not take a line down:** while running, connect to
+   four unreachable documentation addresses (nothing answers there). New
+   destinations alternate between the lines, so four give each line two
+   failures. In another PowerShell window:
+   ```
+   foreach ($ip in '203.0.113.1','203.0.113.2','198.51.100.1','198.51.100.2') {
+     Start-Job { Test-NetConnection $using:ip -Port 81 } | Out-Null }
+   ```
+   About 10 s later (the dial timeout) expect, for each line,
+   `... 2 failed dials in a row (...), but the probe succeeded: stays UP`,
+   and no DOWN. (Test-NetConnection itself may report success: the
+   netstack accepts the connection locally before dialing out. Ignore it;
+   the duolink log is what counts.)
+7. **Cleanup unchanged:** let `--for` expire: routes removed as before.
+
 ## Stickiness
 
 1. Default run: `sticky dsts` grows on both lines while browsing.

@@ -28,7 +28,7 @@ type linkStats struct {
 // net.Conn for the app's side. We dial the real destination through a chosen
 // uplink and copy bytes both ways.
 type forwarder struct {
-	pick    func(dst netip.Addr) *Adapter // which uplink a new flow goes out on
+	bal     *balancer // picks the uplink for each new flow and hears how dials went
 	udpIdle time.Duration
 	stats   map[*Adapter]*linkStats
 	own     map[netip.Addr]bool // our uplinks' IPs; seeing one as a flow source = loop
@@ -37,8 +37,8 @@ type forwarder struct {
 	loopOnce sync.Once
 }
 
-func newForwarder(ups []*Adapter, pick func(netip.Addr) *Adapter, udpIdle time.Duration) *forwarder {
-	f := &forwarder{pick: pick, udpIdle: udpIdle, stats: map[*Adapter]*linkStats{}, own: map[netip.Addr]bool{}}
+func newForwarder(ups []*Adapter, bal *balancer, udpIdle time.Duration) *forwarder {
+	f := &forwarder{bal: bal, udpIdle: udpIdle, stats: map[*Adapter]*linkStats{}, own: map[netip.Addr]bool{}}
 	for _, a := range ups {
 		f.stats[a] = &linkStats{}
 		f.own[a.IPv4.Addr()] = true
@@ -102,7 +102,7 @@ func (f *forwarder) tcp(c adapter.TCPConn) {
 	if !f.accept(src, dst) {
 		return
 	}
-	up := f.pick(dst.Addr())
+	up := f.bal.Pick(dst.Addr())
 	if up == nil {
 		return // no healthy uplink: closing sends a RST to the app
 	}
@@ -112,6 +112,7 @@ func (f *forwarder) tcp(c adapter.TCPConn) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	out, err := up.DialTCP4(ctx, dst.String())
 	cancel()
+	f.bal.noteDial(up, dst, err)
 	if err != nil {
 		return
 	}
@@ -138,7 +139,7 @@ func (f *forwarder) udp(c adapter.UDPConn) {
 	if !f.accept(src, dst) {
 		return
 	}
-	up := f.pick(dst.Addr())
+	up := f.bal.Pick(dst.Addr())
 	if up == nil {
 		return
 	}
@@ -148,8 +149,11 @@ func (f *forwarder) udp(c adapter.UDPConn) {
 	// The netstack hands us one conn per (app src, dst) pair, and we give it
 	// one connected socket on one uplink, so the flow stays pinned to that
 	// uplink until it goes idle.
+	// A connected UDP socket sends nothing yet, so success proves nothing
+	// about the line; only errors (e.g. no route) are reported.
 	out, err := up.DialUDP4(context.Background(), dst.String())
 	if err != nil {
+		f.bal.noteDial(up, dst, err)
 		return
 	}
 	defer out.Close()

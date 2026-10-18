@@ -41,11 +41,26 @@ commands. `duolink list --ip` makes outbound requests; only run it when asked.
 - **Never put real IPs or personal info in code, tests or docs.** Public IPs:
   use 203.0.113.0/24, 198.51.100.0/24 (RFC 5737). LAN examples:
   192.168.1.x / 192.168.2.x. No usernames, absolute paths, MACs, hostnames.
-- **Update the docs at the end of every milestone:** CHANGELOG.md,
-  docs/milestones.md (delivered + test results), docs/action_items.md, and
-  docs/architecture.md, docs/testing.md, docs/decisions.md where affected.
 - Keep it small and readable, with minimal dependencies. Explain every Windows
   networking call in a comment where it's used.
+- CLAUDE.md and docs/ are the source of truth. Read CLAUDE.md,
+  docs/architecture.md, docs/milestones.md and docs/decisions.md before
+  starting a milestone.
+
+## End-of-milestone routine
+
+Follow this at the end of every milestone:
+
+1. `gofmt -l .` prints nothing; `go vet`, `go test` and the build pass.
+2. Update CHANGELOG.md, docs/milestones.md (status → "awaiting test"),
+   docs/testing.md (steps for this feature), and docs/architecture.md /
+   docs/decisions.md if anything changed. Add new to-dos to
+   docs/action_items.md.
+3. Run the privacy check again: no real IPs or personal info in any tracked file.
+4. Give the user a short summary, the exact test steps, and a suggested commit
+   message. Don't commit; the user commits after their test passes.
+5. Stop and wait for the test results. When they come in, record them in
+   docs/milestones.md (status → "done") before starting the next milestone.
 
 ## Windows gotchas (already handled; don't regress)
 

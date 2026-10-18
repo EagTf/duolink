@@ -114,7 +114,7 @@ func cmdRun(args []string) error {
 
 	// The netstack: every TCP/UDP flow Windows routes into the TUN is
 	// terminated here and handed to the forwarder.
-	fwd := newForwarder(ups, bal.Pick, time.Duration(cfg.UDPIdleSeconds)*time.Second)
+	fwd := newForwarder(ups, bal, time.Duration(cfg.UDPIdleSeconds)*time.Second)
 	st, err := core.CreateStack(&core.Config{LinkEndpoint: dev, TransportHandler: fwd})
 	if err != nil {
 		return fmt.Errorf("start netstack: %w", err)
@@ -148,6 +148,11 @@ func cmdRun(args []string) error {
 	}
 
 	bal.run(ctx)
+	// Instant failover on adapter changes. If the subscription fails, the
+	// health probes still catch a dead line, just later, so carry on.
+	if err := watchAdapters(ctx, bal.onAdapterChange); err != nil {
+		fmt.Println("warning: can't watch adapter changes, failover relies on health probes only:", err)
+	}
 	fmt.Println("\nrunning. Press Ctrl+C to stop.")
 	fwd.printStats(ctx, ups, weights, bal, 2*time.Second)
 	fmt.Println("\nstopping...")

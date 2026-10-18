@@ -52,12 +52,34 @@ from several CDN IPs, so they still spread). `sticky dsts` rose on both lines.
 `config --init` and editing duolink.json work (a changed `minutes` shows in
 `duolink config`).
 
+### 7. Instant failover
+Status: done (partially tested).
+Delivered:
+- Adapter watcher (`NotifyIpInterfaceChange` + `NotifyUnicastIpAddressChange`,
+  coalesced, then re-read with `GetAdaptersAddresses`). Disconnected, removed,
+  no IPv4 address or no gateway → line DOWN immediately, reason logged.
+  Adapter back → immediate probe; a good probe brings it UP.
+- Changed address or interface index while running → reported, line stays
+  DOWN until restart.
+- Real-traffic dial failures: 2 in a row to different destination IPs →
+  immediate probe; DOWN only if the probe fails. Refused/reset = line works.
+- Unit tests for every transition, including "dials fail but the probe
+  succeeds → stays UP", and a smoke test of the real subscription calls.
+Tested:
+- Disconnected and reconnected an uplink during a Steam download (about
+  45 Mbit/s before). Found: after the reconnect the download didn't spread
+  back over both lines, because stickiness keeps the CDN IPs on the line they
+  moved to (see docs/action_items.md). Deferred.
+- Not yet run: the remaining steps in docs/testing.md "Instant failover"
+  (exact log lines on unplug/replug, Wi-Fi disconnect, dead DSL behind a
+  working LAN, dead destinations → "stays UP").
+
 ## Planned
 
 | # | Milestone | Status |
 |---|---|---|
-| 7 | Instant failover: mark a line DOWN as soon as its adapter disconnects (`NotifyIpInterfaceChange`) or after 2 consecutive failed dials, not only on the next probe | next |
-| 8 | Per-process rules via `GetExtendedTcpTable` / `GetExtendedUdpTable` (flow's local port → PID → exe): `sticky_exempt` (default `["steam.exe"]`), `pin` (process → line, with fallback when that line is down), `exclude` (not balanced). Configured in duolink.json | planned |
+| 7 | Instant failover: mark a line DOWN as soon as its adapter disconnects, or probe at once after 2 failed dials to different destinations | done (partially tested) |
+| 8 | Per-process rules via `GetExtendedTcpTable` / `GetExtendedUdpTable` (flow's local port → PID → exe): `sticky_exempt` (default `["steam.exe"]`), `pin` (process → line, with fallback when that line is down), `exclude` (not balanced). Configured in duolink.json | next |
 | 9 | System tray app: `duolink tray`, no console, Start/Pause, speeds, Quit with cleanup, single instance, autostart via Task Scheduler with highest privileges | planned |
 | 10 | Small window opened from the tray; X hides it to the tray, only Quit exits | planned |
 | later | Metered/phone lines with a data cap; hot-plugging uplinks; automatic weights from passive throughput measurement; IPv6 | ideas |

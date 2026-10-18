@@ -68,6 +68,34 @@ are left alone. If every line is down, all weighted lines are used anyway.
 The startup loop test runs one probe per line in parallel and marks lines that
 fail it as down from the start.
 
+### Instant failover
+
+Besides the interval, two things can act on a line between probes:
+
+```
+ Windows adapter events ──► watchAdapters (netwatch.go)
+   NotifyIpInterfaceChange        coalesce burst (300 ms)
+   NotifyUnicastIpAddressChange   └► onAdapterChange: GetAdaptersAddresses,
+                                     adapterIssue(startup state, now) per line
+                                       issue appears → setDown(reason)  (no probe)
+                                       issue clears  → kick probe "adapter reconnected"
+
+ real-traffic dials ──► forwarder ──► noteDial(line, dst, err)
+                                       ok / refused / reset → reset count
+                                       cancelled            → ignored
+                                       other failure        → add dst IP (distinct)
+                                       2 distinct IPs       → kick probe "2 failed dials (...)"
+
+ kick ──► healthLoop ──► check(why) ──► probe ok:   UP (logs "stays UP" if kicked)
+                                        probe fail: DOWN ("why, then probe failed: ...")
+```
+
+Each line has a 1-slot `kick` channel, so its health loop is the only
+place that probes it and probes never overlap. Only a successful probe sets a
+line UP; adapter events and dials can only make it DOWN or ask for a probe.
+UDP dials only report errors, because a connected UDP socket sends nothing
+and its success proves nothing.
+
 ## Stickiness
 
 `balancer.sticky` maps destination IP → (line, last new flow). On a new flow,
@@ -93,7 +121,8 @@ Weights stay as name → number until `run` knows the adapters, then
 | `winnet.go` | admin and wintun.dll checks, netsh address/routes, `GetBestInterfaceEx`, TUN readiness, routing dump, IPv6 warning |
 | `run.go` | `run` and `cleanup`, setup/teardown order, self-check, adapter name matching |
 | `forward.go` | netstack TransportHandler: flow filtering, loop guard, TCP/UDP copy, stats |
-| `balance.go` | WRR, stickiness, health checks, weight parsing |
+| `balance.go` | WRR, stickiness, health checks, failed-dial tracking, line state transitions, weight parsing |
+| `netwatch.go` | adapter change subscriptions, `adapterIssue` |
 | `config.go` | `duolink.json`, flag overrides, `duolink config` |
 | `*_test.go` | unit tests (no admin or network needed) |
 

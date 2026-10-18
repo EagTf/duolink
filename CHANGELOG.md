@@ -3,6 +3,23 @@
 Not released yet. Entries are by milestone; see
 [docs/milestones.md](docs/milestones.md) for test results.
 
+## Milestone 7: instant failover
+
+- Adapter watcher (`NotifyIpInterfaceChange` + `NotifyUnicastIpAddressChange`):
+  when an uplink's adapter disconnects, disappears, or loses its IPv4 address
+  or gateway, the line goes DOWN at once with the reason in the log. When the
+  adapter is back, a probe runs immediately; only a successful probe brings
+  the line back UP.
+- An address or interface index that changes while running is reported
+  ("restart duolink to use it") and the line stays DOWN.
+- Failed dials on real traffic: 2 consecutive failures to different
+  destination IPs trigger an immediate health probe on that line. The line
+  goes DOWN only if the probe fails, so dead websites can't take down a
+  healthy line. A refused or reset connection counts as proof the line works.
+- Log lines say why a line went DOWN, and note when failed dials were
+  followed by a good probe ("stays UP").
+- Unchanged: routes, cleanup, existing flows on a DOWN line, sticky behaviour.
+
 ## Milestone 6: config file and stickiness
 
 - `duolink.json` next to `duolink.exe`: weights, stickiness, health-check

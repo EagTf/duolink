@@ -50,6 +50,27 @@ sent), tests the real bound path, and one provider's outage doesn't mark a
 healthy line down. All-down falls back to all lines: more likely the probe
 targets are blocked than every line is dead.
 
+**Adapter events mark DOWN directly; dial failures only trigger a probe.**
+A disconnected adapter can't carry anything, so waiting would only lose
+flows. Failed dials are weaker evidence: the destinations may be down, not
+the line. So two failures to different IPs only ask for a probe, and the
+probe to known-good targets decides. A refused or reset connection is a reply
+from the destination, so it counts as proof the line works.
+
+**Only a successful probe brings a line back UP.** An adapter that reconnects
+may still be waiting for DHCP or for its DSL line to sync, so "connected"
+alone isn't enough.
+
+**On adapter events, re-read the whole adapter list.** The notification rows
+carry partial data and come in bursts. Coalescing the burst and comparing
+each line with its startup state (`adapterIssue`) is simpler and can't miss
+a change.
+
+**A changed address or interface index is reported, not followed.** Sockets
+are bound to the address seen at startup. Following changes live is part of
+the hot-plugging idea; until then the line stays DOWN and the log says to
+restart.
+
 **Existing flows never move.** A TCP connection's source IP is fixed;
 moving it to another line would break it. Only new flows react to health
 and weights.
@@ -58,7 +79,9 @@ and weights.
 and game servers seeing one public IP, which avoids session and anti-cheat
 trouble. Big downloads still spread because CDNs use several IPs (verified
 with Steam). A destination moved by failover stays on its new line, since
-the point is IP consistency.
+the point is IP consistency. Under review: with a sliding timer this keeps a
+long download on one line after the failed line recovers (see
+docs/action_items.md).
 
 **Config: defaults < duolink.json < flags, unknown fields rejected.** A file
 only needs what differs, typos fail loudly instead of being ignored, and
