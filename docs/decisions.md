@@ -114,6 +114,16 @@ would keep them away from their line after it recovers.
 only needs what differs, typos fail loudly instead of being ignored, and
 flags allow one-off overrides without editing the file.
 
+**The status window is plain Win32, not a GUI toolkit.** Go GUI toolkits
+for Windows either need cgo and OpenGL (Fyne, Gio's drivers), are
+unmaintained (walk), or embed a browser (WebView2). A status window needs a
+label, a text box and three buttons: about 300 lines against user32/gdi32
+with no new dependency. It runs its own message loop on a locked OS thread;
+others only post messages to it, so it never blocks or races. Without a
+resource compiler in the build there's no embedded manifest, so the
+Common Controls 6 look comes from an activation context created at
+runtime, and DPI awareness is set with SetProcessDpiAwarenessContext.
+
 **The tray runs from a windowed copy of the exe (duolinkw.exe).** Windows
 fixes per exe whether it gets a console. The CLI needs one; a tray must not
 have one, or a terminal window appears at every logon. Rather than two build

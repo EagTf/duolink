@@ -147,6 +147,40 @@ Tested (steps in docs/testing.md, "Tray app"):
 - No retry loop after a late failure: covered by unit tests (can't be
   triggered safely by hand).
 
+### 10. Status window
+Status: done.
+Delivered:
+- `internal/window`: a small native Win32 window (no GUI framework, no cgo)
+  on its own message-loop thread: status line, a table per line (state,
+  weight, down/up, TCP/UDP, flows, sticky destinations), totals, per-app
+  rule counts, recent events (newest first), and Pause/Start, Open log and
+  Quit buttons. Current Windows button style via an activation context;
+  DPI-aware text; white text area.
+- Opens with a left click on the tray icon or "Open duolink" in the menu.
+  X hides it to the tray; only Quit exits. A second `duolink tray` shows the
+  running tray's window instead of the "already running" dialog.
+- Health and failover events reach the window through an engine `OnEvent`
+  hook (`Balancer.OnLog`), alongside the tray's start/pause/failure events.
+- Tests: text formatting, the real window created hidden and found by class
+  name, the event hook. Layout checked by rendering the window off-screen.
+Tested (steps in docs/testing.md, "Status window"), all passed:
+- Left click opens the window in front with the icon in its title bar;
+  status, per-line table, totals and recent events shown.
+- During a download the table updated every 2 s on both lines; rules line
+  shown; layout clean, nothing cut off.
+- X hid the window while balancing continued (routes still in place); a
+  left click brought it back.
+- Pause / Start / Open log from the window, with the tray menu in sync.
+- Unplugging and replugging Ethernet showed DOWN / back UP in the window
+  within about a second, with the amber / green icon.
+- A second `duolink tray` brought the running window to the front, no
+  dialog (log: "showed its window").
+- Quit from the window removed the routes and exited (log: stopping, both
+  routes deleted, quit).
+- Scaled display: sharp text, nothing cut off.
+- Requested during the test: edit the settings from the window, so it's
+  the full app. Planned as milestone 11.
+
 ## Planned
 
 | # | Milestone | Status |
@@ -154,5 +188,6 @@ Tested (steps in docs/testing.md, "Tray app"):
 | 7 | Instant failover: mark a line DOWN as soon as its adapter disconnects, or probe at once after 2 failed dials to different destinations | done (partially tested) |
 | 8 | Per-process rules via `GetExtendedTcpTable` / `GetExtendedUdpTable` (flow's local port → PID → exe): `sticky_exempt` (default `["steam.exe"]`), `pin` (process → line, with fallback when that line is down), `exclude` (not balanced). Configured in duolink.json | done (partially tested) |
 | 9 | System tray app: `duolink tray`, no console, Start/Pause, speeds, Quit with cleanup, single instance, autostart via Task Scheduler with highest privileges | done (logon start pending) |
-| 10 | Small window opened from the tray; X hides it to the tray, only Quit exits | next |
+| 10 | Small window opened from the tray; X hides it to the tray, only Quit exits | done |
+| 11 | Settings in the window, so it's the full app: edit everything in duolink.json (weights, stickiness, health checks, per-app rules) with explanations, validation before saving, and Apply (restarts duolink with the new settings) | next |
 | later | Metered/phone lines with a data cap; hot-plugging uplinks; automatic weights from passive throughput measurement; IPv6 | ideas |

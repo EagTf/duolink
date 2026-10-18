@@ -206,6 +206,16 @@ func (b *Balancer) expireSticky() {
 	}
 }
 
+// OnLog also hands every health and failover log line (DOWN, back UP, ...)
+// to f, e.g. for a window's event list. Call it before Run.
+func (b *Balancer) OnLog(f func(line string)) {
+	b.logf = func(format string, args ...any) {
+		line := ts() + " " + fmt.Sprintf(format, args...)
+		fmt.Println(line)
+		f(line)
+	}
+}
+
 func (b *Balancer) link(a *netif.Adapter) *uplink {
 	for _, l := range b.links {
 		if l.a == a {

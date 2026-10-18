@@ -123,8 +123,12 @@ punctuation: `eth` = Ethernet, `wifi` = Wi-Fi. Run `duolink list` to see the nam
 
 `duolink tray` puts duolink in the notification area and returns your
 terminal at once. The icon is green while running, amber when a line is
-down, and grey when paused. Hover for the total speed; open the menu for
-each line's state and speed, and for:
+down, and grey when paused. Hover for the total speed. **Left-click** the
+icon (or choose "Open duolink" in the menu) for the status window: a table
+of each line's state, speed, connections and sticky destinations, the per-app
+rule counts, and the recent events (lines going down and up, pauses). Closing
+the window with X just hides it; duolink keeps running in the tray.
+**Right-click** for the menu with each line's state and speed, and:
 
 - **Pause / Start**: Pause restores normal routing; Start brings duolink
   back and re-reads `duolink.json`, so you can change settings without
