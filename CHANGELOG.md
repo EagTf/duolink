@@ -3,6 +3,15 @@
 Not released yet. Entries are by milestone; see
 [docs/milestones.md](docs/milestones.md) for test results.
 
+## Health checks: no false DOWN on a busy line
+
+- A regular health probe must fail `health.failures_before_down` times in a
+  row (default 2) before a line goes DOWN; after a miss it re-checks after
+  `down_interval_seconds`, and logs whether the line recovered. Disconnected
+  adapters and failed real connections still act at once.
+- The probe targets are tried in parallel; the first answer counts.
+- Default `health.timeout_seconds` raised from 3 to 5.
+
 ## Milestone 10: status window
 
 - A small window with the live state: a table per line (state, weight,

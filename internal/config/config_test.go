@@ -24,7 +24,7 @@ func TestLoad(t *testing.T) {
 	// Partial file: only the given fields change.
 	write(`{"sticky": {"minutes": 3}, "weights": {"eth": 2}}`)
 	c, found, err = Load(path)
-	if err != nil || !found || c.Sticky.Minutes != 3 || !c.Sticky.Enabled || c.Weights["eth"] != 2 || c.Health.TimeoutSeconds != 3 {
+	if err != nil || !found || c.Sticky.Minutes != 3 || !c.Sticky.Enabled || c.Weights["eth"] != 2 || c.Health.TimeoutSeconds != 5 || c.Health.FailuresBeforeDown != 2 {
 		t.Fatalf("partial file: %+v %v %v", c, found, err)
 	}
 
@@ -34,6 +34,7 @@ func TestLoad(t *testing.T) {
 		`{"sticky": {"minutes": 0}}`,
 		`{"health": {"targets": ["one.one.one.one:443"]}}`,
 		`{"weights": {"eth": 500}}`,
+		`{"health": {"failures_before_down": 0}}`,
 		`{not json`,
 	} {
 		write(bad)

@@ -221,6 +221,62 @@ func TestAdapterIssueWhileAlreadyDownIsLogged(t *testing.T) {
 	}
 }
 
+// A single missed regular probe doesn't take a line down: on a saturated
+// line one probe can time out although the line works.
+func TestRegularProbeNeedsTwoFailures(t *testing.T) {
+	r := newRig(t)
+	r.probeErr = errors.New("1.1.1.1:443: i/o timeout; 8.8.8.8:443: i/o timeout")
+
+	r.b.check(context.Background(), r.eth, "")
+	if !r.eth.healthy.Load() {
+		t.Fatal("one missed probe took the line DOWN")
+	}
+	if l := r.lastLog(); !strings.Contains(l, "1 of 2 before DOWN") {
+		t.Errorf("log = %q", l)
+	}
+	if got := r.b.Pick(dstA.Addr()); got != r.eth.a && got != r.wifi.a {
+		t.Fatal("no line picked")
+	}
+
+	r.b.check(context.Background(), r.eth, "")
+	if r.eth.healthy.Load() {
+		t.Fatal("two missed probes in a row should take the line DOWN")
+	}
+	if l := r.lastLog(); !strings.Contains(l, "Ethernet is DOWN") || !strings.Contains(l, "(2 in a row)") {
+		t.Errorf("log = %q", l)
+	}
+}
+
+func TestMissThenSuccessResets(t *testing.T) {
+	r := newRig(t)
+	r.probeErr = errors.New("i/o timeout")
+	r.b.check(context.Background(), r.eth, "")
+	r.probeErr = nil
+	r.b.check(context.Background(), r.eth, "")
+	if !r.eth.healthy.Load() || r.eth.probeFails != 0 {
+		t.Fatalf("after miss + success: healthy=%v probeFails=%d", r.eth.healthy.Load(), r.eth.probeFails)
+	}
+	if l := r.lastLog(); !strings.Contains(l, "probe succeeded again: stays UP") {
+		t.Errorf("log = %q", l)
+	}
+	// The count starts over: another single miss is not enough.
+	r.probeErr = errors.New("i/o timeout")
+	r.b.check(context.Background(), r.eth, "")
+	if !r.eth.healthy.Load() {
+		t.Error("a miss after a success should start counting from 1 again")
+	}
+}
+
+func TestFailuresBeforeDownOne(t *testing.T) {
+	r := newRig(t)
+	r.b.health.FailuresBeforeDown = 1 // the old behaviour, if configured
+	r.probeErr = errors.New("i/o timeout")
+	r.b.check(context.Background(), r.eth, "")
+	if r.eth.healthy.Load() {
+		t.Error("with failures_before_down 1, the first miss should take the line DOWN")
+	}
+}
+
 func TestOnLogHook(t *testing.T) {
 	eth, wifi, ups := testUplinks()
 	b := New(ups, map[*netif.Adapter]int{eth: 1, wifi: 1}, noSticky())

@@ -50,6 +50,15 @@ sent), tests the real bound path, and one provider's outage doesn't mark a
 healthy line down. All-down falls back to all lines: more likely the probe
 targets are blocked than every line is dead.
 
+**A regular probe needs two misses in a row.** During a full-speed download
+the router's buffers fill and latency can spike past the probe timeout, so a
+single missed probe marked a working line DOWN (seen in the milestone 9
+test) and halved the throughput for no reason. Two misses, the second only
+`down_interval_seconds` later, keep detection fast but filter those spikes.
+Stronger evidence (a disconnected adapter, or failed real connections
+confirmed by a probe) still acts on the first sign. Targets are probed in
+parallel so the one-timeout worst case stays short.
+
 **Adapter events mark DOWN directly; dial failures only trigger a probe.**
 A disconnected adapter can't carry anything, so waiting would only lose
 flows. Failed dials are weaker evidence: the destinations may be down, not

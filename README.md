@@ -163,8 +163,9 @@ errors.
   "health": {
     "interval_seconds": 15,
     "down_interval_seconds": 4,
-    "timeout_seconds": 3,
-    "targets": ["1.1.1.1:443", "8.8.8.8:443"]
+    "timeout_seconds": 5,
+    "targets": ["1.1.1.1:443", "8.8.8.8:443"],
+    "failures_before_down": 2
   },
   "processes": {
     "sticky_exempt": ["steam.exe"],
@@ -179,7 +180,7 @@ errors.
 |---|---|
 | `weights` | Share of new flows per line. Empty = 1 for every line. Lines not listed get 0 (unused). |
 | `sticky` | A destination IP that got a flow in the last `minutes` keeps using the same line, so sites and game servers see one public IP. |
-| `health` | Every `interval_seconds`, duolink TCP-connects to `targets` through each line (no data is sent). A line that fails gets no new flows and is re-checked every `down_interval_seconds`. |
+| `health` | Every `interval_seconds`, duolink TCP-connects to all `targets` at once through each line (no data is sent); one answer within `timeout_seconds` is enough. A line goes DOWN after `failures_before_down` failed checks in a row (a busy line can miss one), or at once when its adapter disconnects. A DOWN line gets no new flows and is re-checked every `down_interval_seconds`. |
 | `processes` | Per-app rules, by exe file name (case doesn't matter). See below. |
 | `udp_idle_seconds` | A UDP flow ends after this long with no packets. |
 

@@ -17,14 +17,10 @@
 
 ## Known issues
 
-- **Health probes can mark a busy line DOWN.** Seen in the milestone 9 test:
-  during a Steam download, Wi-Fi was marked DOWN twice within a minute (both
-  probe targets timed out after 3 s) and came back seconds later; the adapter
-  never disconnected. Likely a saturated line: router buffers fill, latency
-  spikes past the 3 s probe timeout. The false DOWN sends new flows to the
-  other line only, lowering the total. Planned fix: interval probes need 2
-  consecutive failures before DOWN (the failed-dial trigger already confirms
-  with a probe), and/or a longer default `timeout_seconds`.
+- **Health probes could mark a busy line DOWN** (seen in the milestone 9
+  test during a Steam download). Fixed: two missed probes in a row are needed,
+  probes run in parallel, default timeout 5 s. Awaiting a test under a
+  saturated download; close this item once it passes.
 
 - After rebuilding, the logon task keeps running the old `duolinkw.exe` until
   `duolink tray` (or `duolink autostart on`) is run once to refresh it.
