@@ -9,7 +9,7 @@
  Windows routing table
    │  0.0.0.0/1, 128.0.0.0/1  →  "duolink" adapter   (more specific than the real 0.0.0.0/0)
    ▼
- Wintun adapter "duolink" (198.18.0.1/30)
+ Wintun adapter "duolink" (198.18.0.1/30, MTU 9000: it never leaves the PC)
    │  raw IPv4 packets, read in user space via wintun.dll
    ▼
  gVisor netstack (tun2socks core, promiscuous + spoofing)
@@ -21,18 +21,21 @@
    ▼
  balancer (internal/balance)
    │  sticky destination?  → same line as before
-   │  otherwise            → smooth weighted round-robin over healthy lines
+   │  otherwise            → least busy healthy line (open flows / weight)
    ▼
  bound dialer (dialer.go)
    │  socket with bind(line's IPv4) + IP_UNICAST_IF(line's ifIndex)
    │  → ignores the TUN's /1 routes, uses that line's own default route
+   │  no answer at all? → same flow dialed through the next line
    ▼
  router A or router B → internet
 ```
 
-The forwarder then copies bytes both ways. TCP passes half-closes on with
-`CloseWrite`. UDP ends after `udp_idle_seconds` without packets in either
-direction.
+The forwarder then copies bytes both ways (pooled 128 KB buffers). TCP
+passes half-closes on with `CloseWrite`; after the first half-close the
+other direction must keep moving (2 minutes idle ends the flow), so a peer
+that never sends its FIN can't hold a flow open. UDP ends after
+`udp_idle_seconds` without packets in either direction.
 
 Replies from the internet come back to the bound socket (its source IP is the
 line's address), go through the forwarder into the netstack, and the netstack
@@ -129,11 +132,40 @@ it) are tracked by the forwarder; on `OnLineUp` the engine calls
 `CloseOutageFlows`, so those apps reconnect over all lines
 (`processes.reconnect_after_outage`).
 
+## Picking a line and retrying
+
+Each line counts its open TCP flows (`uplink.active`). `PickFlow` counts the
+new flow on the line it picks, and the forwarder calls `Flow.Done` when the
+dial fails or at the flow's first half-close (a finished download often
+waits a while for the last FIN; it shouldn't scare new flows away).
+`leastBusy` picks the candidate with the lowest active / weight; ties go to
+smooth weighted round-robin among the tied lines, so with nothing open, and
+for UDP (picked with the same rules but not counted), lines alternate by
+weight.
+
+```
+ forwarder.dialTCP(dst, rule)
+   PickFlow(dst, rule, tried) ─► dial through that line (10 s timeout)
+     ok                                 → copy
+     refused / reset (an answer)        → fail the app's connection
+     no answer (timeout, unreachable)   → tried += line, pick again
+     no line left                       → fail the app's connection
+   NoteDial: network down / unreachable / address gone through this line
+     (LineBroken) → line skipped for new flows for 15 s and probed at once;
+     a good probe ends the cooldown. Not an outage (the probe decides that).
+```
+
+The netstack runs at MTU 9000, and Windows' side of the TUN is set to the
+same (`set subinterface ... mtu=9000 store=active`; only a warning if that
+fails, since TCP segment sizes follow the netstack's MSS anyway). The TUN's
+packets never leave the PC, so bigger packets just mean fewer trips through
+the netstack.
+
 ## Stickiness
 
 `balancer.sticky` maps destination IP → (line, last new flow). On a new flow,
 an entry younger than `sticky.minutes` whose line is still a candidate wins
-and its timer restarts. Otherwise WRR picks a line and the entry is
+and its timer restarts. Otherwise the least busy line is picked and the entry is
 (re)written. A sweeper drops expired entries every minute. Stickiness is per
 destination IP, not per port or app.
 
@@ -148,9 +180,9 @@ destination IP, not per port or app.
      PID → exe (OpenProcess + QueryFullProcessImageName), cached 10 s
    Rules.ForExe(exe) → balance.Rule {none | sticky-exempt | pin line | exclude → primary}
  ──► Balancer.PickFor(dst, rule)
-       pin / exclude: rule.line if it's a candidate, else WRR
-       sticky-exempt: WRR, sticky table untouched
-       none:          sticky table, else WRR (as before)
+       pin / exclude: rule.line if it's a candidate, else least busy
+       sticky-exempt: least busy, sticky table untouched
+       none:          sticky table, else least busy
 ```
 
 The app's TCP handshake with the netstack is complete before the forwarder
@@ -217,7 +249,7 @@ Weights stay as name → number until `run` knows the adapters, then
 | `internal/netif` | adapters (`GetAdaptersAddresses`, skip reasons), the bound dialer (`IP_UNICAST_IF`, ipify lookup), the adapter watcher and `Issue`, name matching (`Find`), overlap and IPv6 checks |
 | `internal/route` | netsh: TUN address, half-default routes; `GetBestInterfaceEx` lookups, TUN readiness, routing dump |
 | `internal/procs` | socket → process lookup (`GetExtendedTcpTable` / `GetExtendedUdpTable`, `QueryFullProcessImageName`) |
-| `internal/balance` | WRR, stickiness, health checks, failed-dial tracking, line state transitions, per-app rules, weight resolution |
+| `internal/balance` | least-busy picking, stickiness, health checks, failed-dial tracking, line state transitions, per-app rules, weight resolution |
 | `internal/forward` | the netstack `TransportHandler`: flow filtering, loop guard, TCP/UDP copy, per-uplink counters |
 | `internal/tray` | the tray app (fyne.io/systray): menu, tooltip, state icons, Pause/Start controller with retry, single-instance mutex |
 | `internal/window` | the status and settings windows: plain Win32 (user32/gdi32), one message-loop thread, visual styles via an activation context, DPI awareness; `Format` (status text) and `form` (settings fields <-> config) are the testable parts |

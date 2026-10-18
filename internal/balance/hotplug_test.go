@@ -235,11 +235,11 @@ func TestHealthLoopsFollowLines(t *testing.T) {
 func TestPickFlowReportsOutageAndOnLineUpFires(t *testing.T) {
 	r := newHotRig(t, nil)
 	exempt := Rule{Kind: RuleStickyExempt}
-	if _, outage := r.b.PickFlow(netip.MustParseAddr("203.0.113.20"), exempt); outage {
+	if _, outage := pickFlow(r.b, netip.MustParseAddr("203.0.113.20"), exempt); outage {
 		t.Error("no line is DOWN, but PickFlow reported an outage")
 	}
 	r.b.SetHealthy(r.wifi, false)
-	a, outage := r.b.PickFlow(netip.MustParseAddr("203.0.113.21"), exempt)
+	a, outage := pickFlow(r.b, netip.MustParseAddr("203.0.113.21"), exempt)
 	if a != r.eth || !outage {
 		t.Errorf("Wi-Fi DOWN: got %v, outage=%v; want Ethernet, true", a.Name, outage)
 	}
@@ -263,7 +263,7 @@ func TestRemovedLineCountsAsOutageUntilReplaced(t *testing.T) {
 	r := newHotRig(t, nil)
 	exempt := Rule{Kind: RuleStickyExempt}
 	r.b.applyAdapters([]*netif.Adapter{r.eth})
-	if a, outage := r.b.PickFlow(netip.MustParseAddr("203.0.113.30"), exempt); a != r.eth || !outage {
+	if a, outage := pickFlow(r.b, netip.MustParseAddr("203.0.113.30"), exempt); a != r.eth || !outage {
 		t.Fatalf("Wi-Fi unplugged: got %v, outage=%v; want Ethernet, true", a.Name, outage)
 	}
 
@@ -275,14 +275,14 @@ func TestRemovedLineCountsAsOutageUntilReplaced(t *testing.T) {
 	if nl == nil {
 		t.Fatal("plugged-in adapter is not a line")
 	}
-	if _, outage := r.b.PickFlow(netip.MustParseAddr("203.0.113.31"), exempt); !outage {
+	if _, outage := pickFlow(r.b, netip.MustParseAddr("203.0.113.31"), exempt); !outage {
 		t.Error("the new line isn't UP yet, so it's still an outage")
 	}
 	r.b.check(context.Background(), nl, "new line")
 	if len(up) != 1 || up[0] != "Wi-Fi" {
 		t.Errorf("OnLineUp calls = %v, want [Wi-Fi]", up)
 	}
-	if _, outage := r.b.PickFlow(netip.MustParseAddr("203.0.113.32"), exempt); outage {
+	if _, outage := pickFlow(r.b, netip.MustParseAddr("203.0.113.32"), exempt); outage {
 		t.Error("both lines are UP again, but PickFlow still reports an outage")
 	}
 }
@@ -299,4 +299,11 @@ func TestStaleProbeIgnored(t *testing.T) {
 	if old.healthy.Load() || fired || r.logHas("Wi-Fi is back UP") {
 		t.Errorf("stale probe applied: healthy=%v, OnLineUp=%v, log %q", old.healthy.Load(), fired, r.log)
 	}
+}
+
+// pickFlow picks a line for one flow and closes the flow at once.
+func pickFlow(b *Balancer, dst netip.Addr, r Rule) (*netif.Adapter, bool) {
+	f := b.PickFlow(dst, r, nil)
+	f.Done()
+	return f.Adapter, f.DuringOutage
 }

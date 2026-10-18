@@ -69,6 +69,9 @@ func printStats(s engine.Stats) {
 	if s.Rules != "" {
 		fmt.Println("         ", s.Rules)
 	}
+	if s.Retried > 0 {
+		fmt.Println("          connections saved by trying the other line:", s.Retried)
+	}
 	fmt.Println()
 }
 

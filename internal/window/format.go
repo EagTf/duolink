@@ -36,6 +36,9 @@ func Format(s State) string {
 			line("")
 			line("%s", s.Stats.Rules)
 		}
+		if s.Stats.Retried > 0 {
+			line("Connections saved by trying the other line: %d", s.Stats.Retried)
+		}
 	} else {
 		line("duolink is not balancing right now.")
 	}

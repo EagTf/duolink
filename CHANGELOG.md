@@ -3,6 +3,20 @@
 Not released yet. Entries are by milestone; see
 [docs/milestones.md](docs/milestones.md) for test results.
 
+## Milestone 13: smarter balancing
+
+- New connections go to the least busy line (fewest open connections for
+  its weight) instead of taking turns, so a line whose downloads finished
+  gets the next ones at once.
+- If a line gives no answer when a connection starts, the same connection
+  is tried through the other line, so the app doesn't see an error. A line
+  whose network is down or unreachable gets no new connections for 15 s
+  and is checked at once.
+- The duolink adapter runs at MTU 9000: fewer, bigger packets inside the
+  PC, less CPU on fast downloads.
+- A connection that one side has finished and the other side leaves idle
+  for 2 minutes is closed.
+
 ## Milestone 12: recovery, hot-plug, friendlier per-app rules
 
 - When a line comes back after an outage, the destinations that moved to

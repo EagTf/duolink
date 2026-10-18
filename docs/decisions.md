@@ -42,8 +42,29 @@ adapter to pick a source IP for traffic routed into it.
 used as a source, which made route lookups through the TUN fail right after
 setup. A TUN has no neighbours, so duplicate detection is pointless.
 
-**Smooth weighted round-robin.** Deterministic, interleaves lines evenly for
-any integer weights, and needs no randomness or per-flow measurements.
+**Least busy line, weighted; round-robin only for ties.** Round-robin gave
+every line its turn whether it was busy or not, so a line whose flows had
+just finished still waited for its turn. Counting open TCP flows per line
+and picking the lowest open / weight fills a freed line at once and keeps
+the open flows in the weights' ratio. Ties use smooth weighted round-robin
+(deterministic, no randomness), so with nothing open the order is the same
+as before. UDP isn't counted (most UDP flows are one DNS lookup), and a
+flow stops counting at its first half-close. Speed isn't measured yet
+(milestone 14).
+
+**A dial that gets no answer is retried on the next line.** The app's
+handshake with the netstack is already complete when we dial, so a failure
+would reach the app as a reset, although another line could reach the
+site. Only "no answer" errors are retried: a refusal is the destination's
+answer and would be the same on any line. Errors that mean the line itself
+is broken (network down or unreachable, address gone) also sideline the line
+for 15 s and probe it at once; the probe, not the dial, decides DOWN, as
+before, and a cooldown isn't an outage (no rebalancing afterwards).
+
+**MTU 9000 on the TUN.** Its packets never leave the PC, so the real lines'
+1500 doesn't apply, and bigger packets mean fewer trips through the netstack
+per megabyte. Not 65535: the netstack reads every packet into a buffer that
+big, even an ACK.
 
 **Health = TCP connect to two operators' anycast IPs.** Cheap (no data
 sent), tests the real bound path, and one provider's outage doesn't mark a
@@ -128,7 +149,7 @@ weighted line, with failover.
 connections to a few CDN IPs; stickiness would put them all on one line if
 Steam ever used a single server. Being explicit costs nothing for other apps.
 
-**Pinned or excluded flows fall back to WRR, not to the sticky table, when
+**Pinned or excluded flows fall back to the least busy line, not to the sticky table, when
 their line is DOWN.** They have no sticky history to honour, and writing one
 would keep them away from their line after it recovers.
 

@@ -3,7 +3,8 @@
 CI runs the unit tests (and gofmt, vet, build) on Windows for every pull
 request; a PR can only merge into `main` when they pass.
 
-Unit tests (`go test ./...`) cover the pure logic: WRR order, health
+Unit tests (`go test ./...`) cover the pure logic: least-busy picking,
+retry and cooldown, health
 fallback, stickiness and expiry, weight parsing, config loading and flag
 overrides, overlap warnings. Everything that touches Windows networking is
 tested by hand on a PC with two working uplinks, in an **administrator**
@@ -73,6 +74,31 @@ if something breaks your connection.
    and the total speed doesn't drop.
 4. Unplug a line during the download: it still goes DOWN within about a
    second (`adapter disconnected`), as before.
+
+## Smarter balancing (milestone 13)
+
+With the tray running (admin) and the status window open:
+
+1. **MTU.** The log (Open log) shows `netsh interface ipv4 set subinterface
+   <index> mtu=9000 store=active` and no MTU warning.
+   `netsh interface ipv4 show subinterfaces` lists the duolink adapter with
+   MTU 9000.
+2. **CPU.** During a full-speed Steam download, note duolinkw.exe's CPU in
+   Task Manager (Details tab), and compare with the same download on the
+   previous build (main). Expect it lower.
+3. **Least busy.** During a Steam download the TCP columns of both lines
+   stay close (e.g. 12 and 11). A browser opened alongside fills whichever
+   line has fewer.
+4. **Retry on the other line.** Start a download, then pull Wi-Fi's
+   internet without disconnecting the adapter (unplug router B's DSL cable,
+   or turn off its internet). New connections that would have used Wi-Fi
+   are connected through Ethernet: "Connections saved by trying the other
+   line: N" appears in the window, and pages keep loading without errors
+   until the probes mark Wi-Fi DOWN. Plug it back: Wi-Fi is back UP.
+5. **Weights still work.** Settings: Ethernet 2, Wi-Fi 1. During a download
+   the TCP column is about 2:1. Set them back to 1 and 1.
+6. **Nothing else changed.** Pins, "never balance", stickiness (the sticky
+   column grows for browsing) and the outage reconnect behave as before.
 
 ## Recovery and hot-plug
 

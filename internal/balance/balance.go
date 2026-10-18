@@ -26,11 +26,24 @@ import (
 // next interval.
 const dialFailuresToProbe = 2
 
+// lineCooldown is how long a line gets no new flows after a dial through it
+// failed in a way that means the line itself is broken (see LineBroken). Its
+// probe, kicked at the same time, decides whether it goes DOWN.
+const lineCooldown = 15 * time.Second
+
 type uplink struct {
 	a       *netif.Adapter
 	weight  int
 	healthy atomic.Bool
-	current int // smooth WRR state, guarded by balancer.mu
+	current int // smooth WRR state for ties, guarded by balancer.mu
+
+	// active counts the TCP flows open on this line, for least-busy
+	// picking. A flow stops counting at its first half-close (Flow.Done).
+	active atomic.Int64
+
+	// coolUntil: no new flows before this time, after a dial found the line
+	// broken. Guarded by balancer.mu.
+	coolUntil time.Time
 
 	// kick asks this line's health loop to probe now. It carries what
 	// triggered the probe, for the log. Buffered 1: one pending request is enough.
@@ -106,29 +119,67 @@ func New(ups []*netif.Adapter, weights map[*netif.Adapter]int, cfg *config.Confi
 // Pick chooses the uplink for a new flow to dst that no process rule covers.
 func (b *Balancer) Pick(dst netip.Addr) *netif.Adapter { return b.PickFor(dst, Rule{}) }
 
-// PickFor chooses the uplink for a new flow to dst under rule r.
+// PickFor chooses the uplink for a new flow to dst under rule r, without
+// counting the flow as open (see PickFlow).
 //
-//   - pin / exclude: the rule's line, as long as it's a candidate (weighted and
-//     UP). Otherwise the flow is balanced like a sticky-exempt one.
-//   - sticky-exempt: weighted round-robin; the sticky table is neither read
+//   - pin / exclude: the rule's line, as long as it's a candidate (weighted,
+//     UP, not cooling down). Otherwise the flow is balanced like a
+//     sticky-exempt one.
+//   - sticky-exempt: the least busy line; the sticky table is neither read
 //     nor written, so one app's many connections to the same few servers
 //     spread over all lines.
 //   - no rule: with stickiness on, a destination that got a flow in the last
 //     stickyTTL goes to the same uplink again (if that uplink is still
-//     usable), so the remote side sees one public IP. Everything else is
-//     balanced.
+//     usable), so the remote side sees one public IP. Everything else goes
+//     to the least busy line.
 func (b *Balancer) PickFor(dst netip.Addr, r Rule) *netif.Adapter {
-	a, _ := b.PickFlow(dst, r)
-	return a
+	l, _ := b.pick(dst, r, nil)
+	if l == nil {
+		return nil
+	}
+	return l.a
 }
 
-// PickFlow is PickFor that also reports whether a weighted line was DOWN
-// when the flow was placed: such a flow is on the surviving line only because
-// of the outage (see OnLineUp).
-func (b *Balancer) PickFlow(dst netip.Addr, r Rule) (_ *netif.Adapter, duringOutage bool) {
+// Flow is the line picked for a new flow (PickFlow).
+type Flow struct {
+	Adapter *netif.Adapter // nil if no line can take the flow
+	// DuringOutage: a weighted line was DOWN when the flow was placed, so it's
+	// on this line only because of the outage (see OnLineUp).
+	DuringOutage bool
+
+	l    *uplink
+	once sync.Once
+}
+
+// Done ends the flow's claim on its line for least-busy picking: call it
+// when the dial failed, or at the flow's first half-close. Safe to call
+// more than once.
+func (f *Flow) Done() {
+	if f.l != nil {
+		f.once.Do(func() { f.l.active.Add(-1) })
+	}
+}
+
+// PickFlow is PickFor for a flow that is about to be dialed. The flow counts
+// as open on its line until Done, so the next flows go to less busy lines.
+// skip lists lines already tried for this flow (their dial failed); they're
+// left out, and Adapter is nil when no other line is left.
+func (b *Balancer) PickFlow(dst netip.Addr, r Rule, skip []*netif.Adapter) *Flow {
+	l, outage := b.pick(dst, r, skip)
+	if l == nil {
+		return &Flow{DuringOutage: outage}
+	}
+	l.active.Add(1)
+	return &Flow{Adapter: l.a, DuringOutage: outage, l: l}
+}
+
+func (b *Balancer) pick(dst netip.Addr, r Rule, skip []*netif.Adapter) (_ *uplink, outage bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	cands, outage := b.candidates()
+	if len(skip) > 0 {
+		cands = slices.DeleteFunc(cands, func(l *uplink) bool { return slices.Contains(skip, l.a) })
+	}
 	if len(cands) == 0 {
 		return nil, outage
 	}
@@ -140,32 +191,36 @@ func (b *Balancer) PickFlow(dst netip.Addr, r Rule) (_ *netif.Adapter, duringOut
 		if r.Kind == RulePin {
 			target = b.byName(r.Pin)
 		}
-		if target != nil && contains(cands, target) {
-			return target, outage
+		if l := find(cands, target); l != nil {
+			return l, outage
 		}
-		return wrr(cands), outage
+		return leastBusy(cands), outage
 	case RuleStickyExempt:
-		return wrr(cands), outage
+		return leastBusy(cands), outage
 	}
 	now := b.now()
 	if b.stickyTTL > 0 {
-		if e := b.sticky[dst]; e != nil && now.Sub(e.last) < b.stickyTTL && contains(cands, e.a) {
-			e.last = now
-			return e.a, outage
+		if e := b.sticky[dst]; e != nil && now.Sub(e.last) < b.stickyTTL {
+			if l := find(cands, e.a); l != nil {
+				e.last = now
+				return l, outage
+			}
 		}
 	}
-	a := wrr(cands)
+	l := leastBusy(cands)
 	if b.stickyTTL > 0 {
-		b.sticky[dst] = &stickyEntry{a: a, last: now, duringOutage: outage}
+		b.sticky[dst] = &stickyEntry{a: l.a, last: now, duringOutage: outage}
 	}
-	return a, outage
+	return l, outage
 }
 
-// candidates returns the uplinks that may get new flows: weighted and
-// healthy. outage reports that some weighted line is missing from them
-// (DOWN). If every uplink looks down, all weighted ones are used anyway. More
-// likely the probe targets are blocked than that every line is dead, and
-// refusing all flows would be worse. Caller holds b.mu.
+// candidates returns the uplinks that may get new flows: weighted, healthy
+// and not cooling down after a broken dial. outage reports that some
+// weighted line is DOWN or unplugged (a cooldown alone isn't an outage: the
+// line's probe decides that). If every uplink looks down, all weighted ones
+// are used anyway. More likely the probe targets are blocked than that every
+// line is dead, and refusing all flows would be worse. The same goes when
+// every healthy line is cooling down. Caller holds b.mu.
 func (b *Balancer) candidates() (cands []*uplink, outage bool) {
 	var weighted []*uplink
 	for _, l := range b.links {
@@ -178,7 +233,13 @@ func (b *Balancer) candidates() (cands []*uplink, outage bool) {
 	}
 	if len(cands) > 0 {
 		b.allDown = false
-		return cands, len(cands) < len(weighted) || b.missing > 0
+		outage = len(cands) < len(weighted) || b.missing > 0
+		now := b.now()
+		warm := slices.DeleteFunc(slices.Clone(cands), func(l *uplink) bool { return now.Before(l.coolUntil) })
+		if len(warm) > 0 {
+			cands = warm
+		}
+		return cands, outage
 	}
 	if !b.allDown && len(weighted) > 0 {
 		b.allDown = true
@@ -233,11 +294,36 @@ func (b *Balancer) forgetOutageEntries() {
 	}
 }
 
+// leastBusy is weighted least-active-flows: the line with the lowest
+// open flows / weight. A line whose flows finished gets the next ones at
+// once, instead of waiting for its turn. With weights 2:1 the first line
+// carries about twice as many open flows. Ties go to smooth weighted
+// round-robin among the tied lines, so with nothing open (or for flows that
+// aren't counted, like UDP) lines still alternate by weight. Caller holds
+// b.mu.
+func leastBusy(cands []*uplink) *uplink {
+	var tied []*uplink
+	var bestN, bestW int64 // best score so far, as the fraction bestN / bestW
+	for _, l := range cands {
+		n, w := l.active.Load(), int64(l.weight)
+		switch {
+		case tied == nil || n*bestW < bestN*w:
+			tied, bestN, bestW = []*uplink{l}, n, w
+		case n*bestW == bestN*w:
+			tied = append(tied, l)
+		}
+	}
+	if len(tied) == 1 {
+		return tied[0]
+	}
+	return wrr(tied)
+}
+
 // wrr is smooth weighted round-robin (as in nginx): every candidate's current
 // score grows by its weight, the highest score wins and pays back the total.
 // With weights 2:1 the sequence is A B A, A B A, ...: interleaved, never long
 // runs on one link.
-func wrr(cands []*uplink) *netif.Adapter {
+func wrr(cands []*uplink) *uplink {
 	total := 0
 	var best *uplink
 	for _, l := range cands {
@@ -248,16 +334,17 @@ func wrr(cands []*uplink) *netif.Adapter {
 		}
 	}
 	best.current -= total
-	return best.a
+	return best
 }
 
-func contains(ls []*uplink, a *netif.Adapter) bool {
+// find returns the uplink in ls for a, or nil.
+func find(ls []*uplink, a *netif.Adapter) *uplink {
 	for _, l := range ls {
-		if l.a == a {
-			return true
+		if a != nil && l.a == a {
+			return l
 		}
 	}
-	return false
+	return nil
 }
 
 // StickyCount returns how many destinations are currently pinned to each uplink.
@@ -440,6 +527,11 @@ func (b *Balancer) check(ctx context.Context, l *uplink, why string) {
 	}
 	missed := l.probeFails
 	l.probeFails = 0
+	if err == nil {
+		b.mu.Lock()
+		l.coolUntil = time.Time{} // the line works: no need to wait out a cooldown
+		b.mu.Unlock()
+	}
 	if err != nil {
 		reason := "probe failed: " + err.Error()
 		if why != "" {
@@ -508,17 +600,49 @@ func dialOutcome(err error) int {
 	return dialLineFailed
 }
 
+// RetryOnOtherLine reports whether a failed dial is worth repeating through
+// another line: this line got no answer at all (timeout, unreachable, ...).
+// A refusal came from the destination, so another line would get the same.
+func RetryOnOtherLine(err error) bool { return dialOutcome(err) == dialLineFailed }
+
+// LineBroken reports whether a dial error means the line itself can't send
+// anything right now, not that one destination is unreachable: Windows says
+// the network is down or unreachable through this adapter, or its address is
+// gone.
+func LineBroken(err error) bool {
+	return errors.Is(err, windows.WSAENETUNREACH) || errors.Is(err, windows.WSAENETDOWN) ||
+		errors.Is(err, windows.WSAEADDRNOTAVAIL)
+}
+
 // NoteDial records the result of a real-traffic dial through a. After
 // dialFailuresToProbe consecutive failures to different destination IPs it
 // kicks an immediate probe. The probe, not the dials, decides whether the
 // line goes DOWN: dials can fail because the destinations are down.
 // Several failures to the same IP count once, so retries to one dead server
 // never trigger a probe.
+//
+// A dial that found the line itself broken (LineBroken) is stronger
+// evidence: the line gets no new flows for lineCooldown and is probed at once.
 func (b *Balancer) NoteDial(a *netif.Adapter, dst netip.AddrPort, err error) {
+	broken := err != nil && LineBroken(err)
 	b.mu.Lock()
 	l := b.link(a)
+	cooling := false
+	if l != nil && broken {
+		now := b.now()
+		cooling = now.Before(l.coolUntil)
+		l.coolUntil = now.Add(lineCooldown)
+	}
 	b.mu.Unlock()
 	if l == nil {
+		return
+	}
+	if broken {
+		if !cooling { // log and probe once per cooldown, not once per flow
+			b.logf("%s: dial to %s failed (%s); no new flows on it for %v, probing it",
+				a.Name, dst, shortErr(err), lineCooldown)
+			b.kickProbe(l, "dial failed: "+shortErr(err))
+		}
 		return
 	}
 	outcome := dialOutcome(err)

@@ -26,6 +26,14 @@ const (
 	tunMask = "255.255.255.252"
 )
 
+// TunMTU is the TUN's MTU, on the Windows side (ConfigureTUN) and in the
+// netstack. The TUN's packets never leave the PC (every flow is re-dialed
+// with a normal socket on a real line, which uses the line's own MTU), so the
+// usual 1500 doesn't apply. Bigger packets mean far fewer trips through the
+// netstack per megabyte, which saves CPU on fast downloads. Not 65535: the
+// netstack reads every packet into a buffer of this size, even a tiny ACK.
+const TunMTU = 9000
+
 // TunPrefix is the TUN's /30; nothing inside it is a real destination.
 var TunPrefix = netip.MustParsePrefix(TunAddr + "/30")
 
@@ -60,6 +68,12 @@ func netsh(args ...string) error {
 // that land on the TUN then fail with ERROR_NETWORK_UNREACHABLE. A TUN has no
 // neighbours that could hold a duplicate, so DAD is pointless here. WireGuard
 // for Windows does the same on its Wintun adapters.
+//
+// Last, `netsh interface ipv4 set subinterface ... mtu=TunMTU store=active`
+// sets the TUN's IPv4 MTU (in memory only), so Windows sends packets as big
+// as the netstack accepts and fragments bigger UDP datagrams to fit. If that
+// fails, duolink still works: TCP segment sizes follow the MSS the netstack
+// announces, so it's only a warning.
 func ConfigureTUN(ifIndex uint32) error {
 	var err error
 	for i := 0; i < 10; i++ {
@@ -77,11 +91,18 @@ func ConfigureTUN(ifIndex uint32) error {
 		err = netsh("interface", "ipv4", "set", "address", fmt.Sprintf("name=%d", ifIndex),
 			"source=static", "address="+TunAddr, "mask="+tunMask, "store=active")
 		if err == nil {
-			return nil
+			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if err := netsh("interface", "ipv4", "set", "subinterface", fmt.Sprint(ifIndex),
+		fmt.Sprintf("mtu=%d", TunMTU), "store=active"); err != nil {
+		fmt.Println("warning: could not set the duolink adapter's MTU, using Windows' default:", err)
+	}
+	return nil
 }
 
 // AddRoutes points 0.0.0.0/1 and 128.0.0.0/1 at the TUN adapter.
