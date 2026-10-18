@@ -93,3 +93,40 @@ func TestParseWeightSpec(t *testing.T) {
 		}
 	}
 }
+
+func TestSaveRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "duolink.json")
+	c := Default()
+	c.Weights = map[string]int{"Ethernet": 2, "Wi-Fi": 1}
+	c.Sticky.Minutes = 20
+	c.Processes.Pin = map[string]string{"discord.exe": "eth"}
+	if err := Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := Load(path)
+	if err != nil || !found {
+		t.Fatalf("Load after Save: %v %v", found, err)
+	}
+	if got.Weights["Ethernet"] != 2 || got.Sticky.Minutes != 20 || got.Processes.Pin["discord.exe"] != "eth" {
+		t.Errorf("round trip lost values: %+v", got)
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Error("temporary file left behind")
+	}
+}
+
+func TestSaveRejectsInvalid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "duolink.json")
+	if err := os.WriteFile(path, []byte(`{"sticky": {"minutes": 7}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := Default()
+	c.Sticky.Minutes = 0 // invalid while enabled
+	if err := Save(path, c); err == nil {
+		t.Fatal("Save accepted an invalid config")
+	}
+	// The existing file is untouched.
+	if b, _ := os.ReadFile(path); string(b) != `{"sticky": {"minutes": 7}}` {
+		t.Errorf("file changed: %s", b)
+	}
+}

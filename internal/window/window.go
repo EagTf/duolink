@@ -32,26 +32,32 @@ type Actions struct {
 
 // Window is the status window. Show and Update are safe from any goroutine.
 type Window struct {
-	act  Actions
-	hwnd uintptr
+	act   Actions
+	hooks SettingsHooks
+	icon  []byte
+	hwnd  uintptr
 
-	mu    sync.Mutex
-	state State // latest state to display, read on the window thread
+	mu      sync.Mutex
+	state   State // latest state to display, read on the window thread
+	saveErr error // result of the last settings Save
+
+	set *settingsUI // the settings window, created on first use (window thread only)
 
 	status, text, toggle uintptr // control handles
 }
 
 // Control IDs for WM_COMMAND.
 const (
-	idToggle = 101
-	idLog    = 102
-	idQuit   = 103
+	idToggle   = 101
+	idLog      = 102
+	idQuit     = 103
+	idSettings = 104
 )
 
-// New creates the window, hidden, and starts its message loop. icon is .ico
-// data for the title bar and taskbar.
-func New(act Actions, icon []byte) (*Window, error) {
-	w := &Window{act: act}
+// New creates the window, hidden, and starts its message loop. hooks connect
+// the settings window; icon is .ico data for the title bars and taskbar.
+func New(act Actions, hooks SettingsHooks, icon []byte) (*Window, error) {
+	w := &Window{act: act, hooks: hooks, icon: icon}
 	ready := make(chan error, 1)
 	go w.loop(icon, ready)
 	return w, <-ready
@@ -145,8 +151,9 @@ func (w *Window) loop(icon []byte, ready chan<- error) {
 	w.text = child("EDIT", "", esMultiline|esReadOnly|esAutoVScroll|wsVScroll, wsExClientEdge, 14, 46, 612, 318, 0)
 	w.toggle = child("BUTTON", "Pause", bsPushButton|wsTabStop, 0, 14, 376, 100, 30, idToggle)
 	logBtn := child("BUTTON", "Open log", bsPushButton|wsTabStop, 0, 122, 376, 100, 30, idLog)
+	setBtn := child("BUTTON", "Settings", bsPushButton|wsTabStop, 0, 230, 376, 100, 30, idSettings)
 	quitBtn := child("BUTTON", "Quit", bsPushButton|wsTabStop, 0, 526, 376, 100, 30, idQuit)
-	for h, f := range map[uintptr]uintptr{w.status: bold, w.text: mono, w.toggle: ui, logBtn: ui, quitBtn: ui} {
+	for h, f := range map[uintptr]uintptr{w.status: bold, w.text: mono, w.toggle: ui, logBtn: ui, setBtn: ui, quitBtn: ui} {
 		pSendMessageW.Call(h, wmSetFont, f, 1)
 	}
 	ready <- nil
@@ -157,9 +164,15 @@ func (w *Window) loop(icon []byte, ready chan<- error) {
 		if int32(r) <= 0 { // WM_QUIT or error
 			return
 		}
-		// IsDialogMessage gives the buttons Tab and Enter/Space handling.
+		// IsDialogMessage gives the controls Tab and Enter/Space handling,
+		// in whichever of our windows the message is for.
 		if d, _, _ := pIsDialogMessageW.Call(hwnd, ptr(&m)); d != 0 {
 			continue
+		}
+		if w.set != nil {
+			if d, _, _ := pIsDialogMessageW.Call(w.set.hwnd, ptr(&m)); d != 0 {
+				continue
+			}
 		}
 		pTranslateMessage.Call(ptr(&m))
 		pDispatchMessageW.Call(ptr(&m))
@@ -175,6 +188,12 @@ func (w *Window) wndProc(hwnd, message, wParam, lParam uintptr) uintptr {
 	case wmAppShow:
 		pShowWindow.Call(hwnd, swShowNormal)
 		pSetForegroundWindow.Call(hwnd)
+		return 0
+	case wmAppSettings:
+		w.openSettings()
+		return 0
+	case wmAppSaved:
+		w.saved()
 		return 0
 	case wmAppState:
 		w.mu.Lock()
@@ -203,6 +222,8 @@ func (w *Window) wndProc(hwnd, message, wParam, lParam uintptr) uintptr {
 				f = w.act.OpenLog
 			case idQuit:
 				f = w.act.Quit
+			case idSettings:
+				w.openSettings() // window thread already; nothing blocks
 			}
 			if f != nil {
 				go f() // never block the window thread

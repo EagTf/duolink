@@ -19,8 +19,15 @@
 
 - **Health probes could mark a busy line DOWN** (seen in the milestone 9
   test during a Steam download). Fixed: two missed probes in a row are needed,
-  probes run in parallel, default timeout 5 s. Awaiting a test under a
-  saturated download; close this item once it passes.
+  probes run in parallel, default timeout 5 s. Seen working once: a single
+  missed probe was tolerated, and the line went DOWN only on the second
+  miss, when the Wi-Fi adapter really dropped. Still to test: a long
+  saturated download with a healthy Wi-Fi adapter shows no false DOWN.
+- **The test PC's USB Wi-Fi adapter fails under sustained load** (hardware,
+  not duolink): probes time out, then Windows reports the adapter
+  disconnected and it sees no networks until it's re-plugged. Being
+  replaced. duolink handled each drop correctly (DOWN at once, back UP when
+  it returns).
 
 - After rebuilding, the logon task keeps running the old `duolinkw.exe` until
   `duolink tray` (or `duolink autostart on`) is run once to refresh it.
@@ -70,6 +77,11 @@
   runs. The tray app (milestone 9) replaces this.
 
 ## Ideas
+
+- Settings window, per-app rules: friendlier editing. An "Add program…"
+  button with a file picker for the .exe (or type the name), and for pins a
+  dropdown of the connected lines instead of typing `= eth`. Suggested
+  during the milestone 11 test.
 
 - Status window: remember its position; per-monitor DPI (it uses the
   system DPI, so on a second monitor with a different scale Windows

@@ -34,7 +34,13 @@ var (
 	pGetSystemMetrics              = user32.NewProc("GetSystemMetrics")
 	pGetDpiForSystem               = user32.NewProc("GetDpiForSystem")
 	pSetProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
+	pGetWindowTextW                = user32.NewProc("GetWindowTextW")
+	pGetWindowTextLengthW          = user32.NewProc("GetWindowTextLengthW")
+	pEnableWindow                  = user32.NewProc("EnableWindow")
+	pGetSysColorBrush              = user32.NewProc("GetSysColorBrush")
 	pCreateFontW                   = gdi32.NewProc("CreateFontW")
+	pSetTextColor                  = gdi32.NewProc("SetTextColor")
+	pSetBkMode                     = gdi32.NewProc("SetBkMode")
 	pGetStockObject                = gdi32.NewProc("GetStockObject")
 	pSetBkColor                    = gdi32.NewProc("SetBkColor")
 	pCreateActCtxW                 = kernel32.NewProc("CreateActCtxW")
@@ -51,10 +57,19 @@ const (
 	wsTabStop      = 0x00010000
 	wsExClientEdge = 0x00000200
 
-	esMultiline   = 0x0004
-	esAutoVScroll = 0x0040
-	esReadOnly    = 0x0800
-	bsPushButton  = 0x0000
+	esMultiline    = 0x0004
+	esAutoVScroll  = 0x0040
+	esReadOnly     = 0x0800
+	bsPushButton   = 0x0000
+	bsAutoCheckBox = 0x0003
+	esAutoHScroll  = 0x0080
+	esWantReturn   = 0x1000
+	esNumber       = 0x2000
+	bmGetCheck     = 0x00F0
+	bmSetCheck     = 0x00F1
+	transparent    = 1
+	darkRed        = 0x000000B0 // COLORREF is 0x00BBGGRR
+	darkGreen      = 0x00007000
 
 	wmDestroy        = 0x0002
 	wmClose          = 0x0010
@@ -65,6 +80,8 @@ const (
 	wmApp            = 0x8000
 	wmAppShow        = wmApp + 1 // bring the window up (also sent by a second `duolink tray`)
 	wmAppState       = wmApp + 2 // new State to display
+	wmAppSettings    = wmApp + 3 // open the settings window
+	wmAppSaved       = wmApp + 4 // a settings save finished
 
 	bnClicked = 0
 

@@ -3,6 +3,17 @@
 Not released yet. Entries are by milestone; see
 [docs/milestones.md](docs/milestones.md) for test results.
 
+## Milestone 11: settings in the window
+
+- Settings window (button in the status window, "Settings…" in the tray
+  menu): every option in duolink.json with explanations, including the
+  per-app rules as simple lists.
+- Save and apply checks everything first (also against the lines that are
+  connected) and shows problems in the window's own words; nothing is
+  written until it's valid. duolink.json is written atomically and duolink
+  restarts with the new settings if it was running.
+- Reset to defaults fills in the defaults without saving.
+
 ## Health checks: no false DOWN on a busy line
 
 - A regular health probe must fail `health.failures_before_down` times in a

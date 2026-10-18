@@ -158,6 +158,10 @@ with the lowest interface metric.
    engine OnStats every 2 s → menu rows, tooltip, icon colour, window
    engine OnEvent (DOWN, back UP, ...) + tray start/pause/failure → window events
    left click / "Open duolink" → window.Show ; X hides it, only Quit exits
+   Settings (window button / menu) → form from config.Load + connected lines
+     Save and apply → form checks → config.Validate → ResolveWeights/ResolveRules
+       against the real lines → config.Save (temp file + rename) → if running:
+       stop + start (start re-reads the file); if paused: applies on Start
 ```
 
 The engine takes the `Global\duolink-engine` mutex for as long as it runs,
@@ -180,14 +184,14 @@ Weights stay as name → number until `run` knows the adapters, then
 |---|---|
 | root (`package main`) | the CLI: command dispatch (`main.go`), `list` and `debug route` (`cmd_list.go`), `run` (prints engine stats) and `cleanup` (`cmd_run.go`), config flags and `duolink config` (`cmd_config.go`), `tray` and `autostart` (`cmd_tray.go`) |
 | `internal/engine` | one run of duolink: preconditions (admin, wintun.dll, 2 uplinks), TUN + netstack + routes, self-check, the "one engine per PC" mutex, Stop (undo in reverse), stats sampling |
-| `internal/config` | `duolink.json`: types, defaults, loading, validation, `--weights` syntax |
+| `internal/config` | `duolink.json`: types, defaults, loading, validation, `--weights` syntax, atomic `Save` |
 | `internal/netif` | adapters (`GetAdaptersAddresses`, skip reasons), the bound dialer (`IP_UNICAST_IF`, ipify lookup), the adapter watcher and `Issue`, name matching (`Find`), overlap and IPv6 checks |
 | `internal/route` | netsh: TUN address, half-default routes; `GetBestInterfaceEx` lookups, TUN readiness, routing dump |
 | `internal/procs` | socket → process lookup (`GetExtendedTcpTable` / `GetExtendedUdpTable`, `QueryFullProcessImageName`) |
 | `internal/balance` | WRR, stickiness, health checks, failed-dial tracking, line state transitions, per-app rules, weight resolution |
 | `internal/forward` | the netstack `TransportHandler`: flow filtering, loop guard, TCP/UDP copy, per-uplink counters |
 | `internal/tray` | the tray app (fyne.io/systray): menu, tooltip, state icons, Pause/Start controller with retry, single-instance mutex |
-| `internal/window` | the status window: plain Win32 (user32/gdi32), own message loop thread, visual styles via an activation context, DPI awareness, `Format` for its text |
+| `internal/window` | the status and settings windows: plain Win32 (user32/gdi32), one message-loop thread, visual styles via an activation context, DPI awareness; `Format` (status text) and `form` (settings fields <-> config) are the testable parts |
 | `internal/guiexe` | the windowed copy: duolinkw.exe = duolink.exe with the PE Subsystem field set to GUI |
 | `internal/autostart` | the logon Task Scheduler task (XML, `schtasks`) |
 | `internal/winexec` | runs console tools (netsh, schtasks, route) with `CREATE_NO_WINDOW` |
