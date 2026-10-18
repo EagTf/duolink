@@ -1,0 +1,31 @@
+# Binaries and build output
+*.exe
+*.dll
+*.test
+*.out
+/bin/
+/dist/
+/build/
+
+# Wintun is downloaded separately from https://www.wintun.net/ (see README)
+wintun.dll
+wintun/
+
+# Personal config
+duolink.json
+
+# Logs
+*.log
+logs/
+
+# Editors and OS junk
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Local Claude Code settings (permissions, per machine)
+.claude/settings.local.json
