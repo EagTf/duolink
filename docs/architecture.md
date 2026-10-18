@@ -161,6 +161,30 @@ fails, since TCP segment sizes follow the netstack's MSS anyway). The TUN's
 packets never leave the PC, so bigger packets just mean fewer trips through
 the netstack.
 
+## Automatic weights
+
+With `auto_weights` on and no weights set (`Config.AutoWeighted`), every
+line starts at weight 100 and `Balancer.autoLoop` re-weights them every
+second from the forwarder's byte counters (`SetMeter`: rx + tx per line):
+
+```
+ rate = bytes this second
+ busy (rate ≥ 5% of peak)  → peak = max(rate, peak × 0.97)
+ idle                      → peak × 1.03, but at most half the best peak
+ every line peak ≥ 50 KB/s → weight = max(5, round(100 × peak / best peak))
+ otherwise                 → all 100 (equal, so each line gets measured)
+```
+
+Weights are written under the balancer's mutex, so least-busy picking reads
+them like fixed weights. New and replaced lines start at 100 with a fresh
+measurement. The weights are logged when first measured and after a change
+of 15 or more, at most once a minute. Fixed weights (file, `--weights`,
+Settings) turn all of this off.
+
+The stats also read each line's adapter counters from Windows
+(`netif.Octets`, GetIfEntry2Ex): the whole adapter's traffic, all apps, next
+to what duolink carried.
+
 ## Stickiness
 
 `balancer.sticky` maps destination IP → (line, last new flow). On a new flow,
@@ -249,7 +273,7 @@ Weights stay as name → number until `run` knows the adapters, then
 | `internal/netif` | adapters (`GetAdaptersAddresses`, skip reasons), the bound dialer (`IP_UNICAST_IF`, ipify lookup), the adapter watcher and `Issue`, name matching (`Find`), overlap and IPv6 checks |
 | `internal/route` | netsh: TUN address, half-default routes; `GetBestInterfaceEx` lookups, TUN readiness, routing dump |
 | `internal/procs` | socket → process lookup (`GetExtendedTcpTable` / `GetExtendedUdpTable`, `QueryFullProcessImageName`) |
-| `internal/balance` | least-busy picking, stickiness, health checks, failed-dial tracking, line state transitions, per-app rules, weight resolution |
+| `internal/balance` | least-busy picking, automatic weights, stickiness, health checks, failed-dial tracking, line state transitions, per-app rules, weight resolution |
 | `internal/forward` | the netstack `TransportHandler`: flow filtering, loop guard, TCP/UDP copy, per-uplink counters |
 | `internal/tray` | the tray app (fyne.io/systray): menu, tooltip, state icons, Pause/Start controller with retry, single-instance mutex |
 | `internal/window` | the status and settings windows: plain Win32 (user32/gdi32), one message-loop thread, visual styles via an activation context, DPI awareness; `Format` (status text) and `form` (settings fields <-> config) are the testable parts |

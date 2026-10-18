@@ -296,6 +296,36 @@ tested yet: retry on the other line (needs a line that stays connected but
 loses internet; an adapter disconnect marks the line DOWN before any dial
 fails) and 2:1 weights with least-busy picking.
 
+### 14. Automatic weights
+Status: done.
+Delivered:
+- `auto_weights` (default on): with no weights set, each line's weight
+  follows its measured speed (peak of what it carried through duolink,
+  per second; fastest line 100, floor 5; equal until every line carried
+  50 KB/s). Busy-but-slower lines sink 3%/s, idle lines hold and drift
+  back up to half the best. Logged when first measured and on changes of
+  15+, at most once a minute.
+- Fixed weights (file, `--weights`, Settings) turn it off.
+- New and replaced lines start at 100 and are measured afresh.
+- Settings: "Automatic" checkbox; the weight fields are greyed out while
+  it's ticked.
+- Status window: `Auto` weight column, and `PC down`, each adapter's whole
+  download from Windows' counters (GetIfEntry2Ex), all apps. Window
+  widened to fit. `duolink run` prints `pc down` too.
+- Tests: weights follow speed, idle hold and cap, busy decay, floor and
+  recovery, logging limits, new lines, fixed weights win, the form's
+  checkbox round trip, the window's new columns.
+- Planned as `"weights": "auto"`; built as a separate `auto_weights` switch
+  so existing files stay valid.
+Tested: all steps pass. During a Steam download the weights were measured
+as Ethernet 100, Wi-Fi 90, and the TCP column followed them. PC down
+matched duolink's own numbers during the download and was higher with
+LAN traffic. Settings: unticking Automatic and setting 2 / 1 showed
+`Weight` 2 and 1 with TCP about 2:1 (also covers milestone 13's 2:1
+test), and ticking it again went back to `Auto`; duolink.json followed.
+The wider status window fits the table. After a Wi-Fi outage the line got
+traffic again with its weight back near its old value.
+
 ## Planned
 
 | # | Milestone | Status |
@@ -307,7 +337,7 @@ fails) and 2:1 weights with least-busy picking.
 | 11 | Settings in the window, so it's the full app: edit everything in duolink.json (weights, stickiness, health checks, per-app rules) with explanations, validation before saving, and Apply (restarts duolink with the new settings) | done |
 | 12 | Recovery after failover (rebalance destinations that moved during an outage), hot-plug (lines follow adapters that come, go or change address), friendlier per-app rules (list, file picker, line dropdown) | done |
 | 13 | Smarter balancing: retry a failed dial on another line, least-busy picking, MTU 9000 on the TUN | done (retry untested) |
-| 14 | Automatic weights from measured speed, per-adapter total traffic | planned |
+| 14 | Automatic weights from measured speed, per-adapter total traffic | done |
 | 15 | Auto-pause with fewer than two working lines; control the running tray from the CLI | planned |
 | 16 | IPv6 | planned |
 | 17 | SOCKS5 proxy mode, no admin needed | planned |

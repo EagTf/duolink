@@ -61,6 +61,18 @@ is broken (network down or unreachable, address gone) also sideline the line
 for 15 s and probe it at once; the probe, not the dial, decides DOWN, as
 before, and a cooldown isn't an outage (no rebalancing afterwards).
 
+**Automatic weights from measured speed, by default.** Fixed weights need
+the user to know each line's speed, and lines change (a phone tether next
+to a fixed line, a VDSL line that syncs lower). The measure is what each
+line actually carried through duolink: no speed tests, no extra traffic.
+A peak, not an average, because a line only shows its speed while it's
+busy; it holds while the line is idle and sinks slowly only while the line
+is busy but slower. The two failure modes are guarded: a floor of 5 keeps a
+slow line measurable, and an idle line's estimate drifts back up to half the
+best, so one bad moment can't starve it. A separate `auto_weights` switch,
+not a special value in `weights`, so every existing file stays valid; any
+weight set by hand wins, as the more explicit choice.
+
 **MTU 9000 on the TUN.** Its packets never leave the PC, so the real lines'
 1500 doesn't apply, and bigger packets mean fewer trips through the netstack
 per megabyte. Not 65535: the netstack reads every packet into a buffer that

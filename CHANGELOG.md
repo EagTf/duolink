@@ -3,6 +3,14 @@
 Not released yet. Entries are by milestone; see
 [docs/milestones.md](docs/milestones.md) for test results.
 
+## Milestone 14: automatic weights
+
+- Each line's share of new connections now follows its measured speed by
+  default (`auto_weights`), so a faster line gets more. Weights set by hand
+  still work and turn this off. Settings has an "Automatic" checkbox.
+- The status window shows the automatic weights (`Auto`) and each
+  adapter's whole download as Windows counts it (`PC down`, all apps).
+
 ## Milestone 13: smarter balancing
 
 - New connections go to the least busy line (fewest open connections for

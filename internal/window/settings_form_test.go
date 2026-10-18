@@ -30,6 +30,36 @@ func TestFormRoundTripDefaults(t *testing.T) {
 	}
 }
 
+// Automatic weights are the default; the checkbox decides, and weights set
+// by hand turn it off (they win, as when loading the file).
+func TestFormAutoWeights(t *testing.T) {
+	f := formFromConfig(config.Default(), lines)
+	if !f.AutoWeights {
+		t.Fatal("defaults should show automatic weights")
+	}
+	f.Weights = []string{"5", "oops"} // ignored while automatic
+	c, err := f.toConfig()
+	if err != nil || !c.AutoWeights || len(c.Weights) != 0 || !c.AutoWeighted() {
+		t.Errorf("automatic: saved %v, auto %v, err %v", c.Weights, c.AutoWeights, err)
+	}
+
+	f.AutoWeights = false
+	f.Weights = []string{"1", "1"}
+	c, err = f.toConfig()
+	if err != nil || c.AutoWeights || len(c.Weights) != 0 || c.AutoWeighted() {
+		t.Errorf("by hand, all 1: saved %v, auto %v, err %v", c.Weights, c.AutoWeights, err)
+	}
+	if formFromConfig(c, lines).AutoWeights {
+		t.Error("automatic weights turned off should stay off")
+	}
+
+	hand := config.Default()
+	hand.Weights = map[string]int{"eth": 2, "wifi": 1}
+	if formFromConfig(hand, lines).AutoWeights {
+		t.Error("weights set by hand win over automatic weights")
+	}
+}
+
 func TestFormWeightsMatchedByPrefix(t *testing.T) {
 	c := config.Default()
 	c.Weights = map[string]int{"eth": 2} // as people write them in the file
@@ -51,7 +81,7 @@ func TestFormErrors(t *testing.T) {
 		want string // part of the error
 	}{
 		{func(f *form) { f.StickyMin = "ten" }, "Stickiness minutes"},
-		{func(f *form) { f.Weights[1] = "" }, "Wi-Fi weight"},
+		{func(f *form) { f.AutoWeights = false; f.Weights[1] = "" }, "Wi-Fi weight"},
 		{func(f *form) { f.Failures = "0" }, "DOWN after (misses): must be 1..10"},
 		{func(f *form) { f.Targets = "one.one.one.one:443" }, "Targets:"},
 	}

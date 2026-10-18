@@ -116,6 +116,9 @@ func Start(o Options) (_ *Engine, err error) {
 		fmt.Println("note: only one uplink has a non-zero weight, so nothing is being combined")
 	}
 	e.bal = balance.New(e.ups, e.weights, cfg)
+	if e.bal.AutoWeights() {
+		fmt.Println("weights: automatic, each line's share follows its measured speed (equal until measured)")
+	}
 	if o.OnEvent != nil {
 		e.bal.OnLog(o.OnEvent)
 	}
@@ -152,6 +155,11 @@ func Start(o Options) (_ *Engine, err error) {
 	// The netstack: every TCP/UDP flow Windows routes into the TUN is
 	// terminated here and handed to the forwarder.
 	e.fwd = forward.New(e.bal, rules, cfg.UDPIdle(), cfg.Processes.ReconnectAfterOutage)
+	// Automatic weights measure what each line carries through duolink.
+	e.bal.SetMeter(func(a *netif.Adapter) int64 {
+		c := e.fwd.Counters(a)
+		return c.Rx + c.Tx
+	})
 	// When a line comes back, download apps' connections from the outage are
 	// closed so they reconnect over all lines (only those; see forward).
 	e.bal.OnLineUp(func(*netif.Adapter) {

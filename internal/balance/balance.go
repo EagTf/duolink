@@ -45,6 +45,8 @@ type uplink struct {
 	// broken. Guarded by balancer.mu.
 	coolUntil time.Time
 
+	meter meter // speed measurement for automatic weights
+
 	// kick asks this line's health loop to probe now. It carries what
 	// triggered the probe, for the log. Buffered 1: one pending request is enough.
 	kick chan string
@@ -76,6 +78,10 @@ type stickyEntry struct {
 type Balancer struct {
 	health     config.HealthConfig
 	weightSpec map[string]int // configured weights, for lines that appear later
+	auto       bool           // weights follow measured speed (autoweight.go)
+	meterFn    func(*netif.Adapter) int64
+	autoLogged map[*uplink]int // weights at the last log; touched by the auto loop only
+	autoLogAt  time.Time
 
 	mu        sync.Mutex
 	links     []*uplink // the current lines; changes when adapters come, go or move
@@ -100,6 +106,7 @@ func New(ups []*netif.Adapter, weights map[*netif.Adapter]int, cfg *config.Confi
 	b := &Balancer{
 		health:     cfg.Health,
 		weightSpec: cfg.Weights,
+		auto:       cfg.AutoWeighted(),
 		stickyTTL:  cfg.StickyTTL(),
 		sticky:     map[netip.Addr]*stickyEntry{},
 		now:        time.Now,
@@ -109,7 +116,11 @@ func New(ups []*netif.Adapter, weights map[*netif.Adapter]int, cfg *config.Confi
 	}
 	b.probe = func(ctx context.Context, a *netif.Adapter) error { return Probe(ctx, a, b.health) }
 	for _, a := range ups {
-		l := &uplink{a: a, weight: weights[a], kick: make(chan string, 1)}
+		w := weights[a]
+		if b.auto && w > 0 {
+			w = autoFull // equal until measured
+		}
+		l := &uplink{a: a, weight: w, kick: make(chan string, 1)}
 		l.healthy.Store(true)
 		b.links = append(b.links, l)
 	}
@@ -416,9 +427,12 @@ func (b *Balancer) SetHealthy(a *netif.Adapter, ok bool) {
 // Line is one current line, for display.
 type Line struct {
 	Adapter *netif.Adapter
-	Weight  int
+	Weight  int // with automatic weights: 5..100, the fastest line 100
 	Healthy bool
 }
+
+// AutoWeights reports whether weights follow measured speed.
+func (b *Balancer) AutoWeights() bool { return b.auto }
 
 // Lines returns the current lines, in the order they were added.
 func (b *Balancer) Lines() []Line {
@@ -455,6 +469,9 @@ func (b *Balancer) Run(ctx context.Context) {
 		b.startLoop(l)
 	}
 	b.mu.Unlock()
+	if b.auto && b.meterFn != nil {
+		go b.autoLoop(ctx)
+	}
 	if b.stickyTTL > 0 {
 		go func() {
 			t := time.NewTicker(time.Minute)
@@ -763,6 +780,9 @@ func (b *Balancer) applyAdapters(all []*netif.Adapter) {
 			continue
 		}
 		w := weightFor(b.weightSpec, u, ups)
+		if b.auto && w > 0 {
+			w = autoFull // measured like the others from now on
+		}
 		nl := newUplink(u, w)
 		lines = append(lines, nl)
 		if w == 0 {

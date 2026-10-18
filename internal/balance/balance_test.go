@@ -19,6 +19,7 @@ func testUplinks() (eth, wifi *netif.Adapter, ups []*netif.Adapter) {
 func noSticky() *config.Config {
 	c := config.Default()
 	c.Sticky.Enabled = false
+	c.AutoWeights = false // these tests set weights by hand
 	return &c
 }
 

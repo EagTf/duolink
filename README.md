@@ -13,7 +13,8 @@ lines, a Steam download that opens several connections can reach about
 
 - **Per-flow load balancing, not bonding.** Each new TCP connection or UDP
   flow goes out through one line: the least busy one, counting the
-  connections each line has open (weights shift the share). A flow stays on
+  connections each line has open. Each line's share follows its measured
+  speed, so a faster line gets more (or set fixed weights). A flow stays on
   its line until it ends. If a line gives no answer when a connection
   starts, duolink tries the other line, so the app doesn't see an error.
 - **One connection = one line.** A single download over one connection never
@@ -127,7 +128,9 @@ punctuation: `eth` = Ethernet, `wifi` = Wi-Fi. Run `duolink list` to see the nam
 terminal at once. The icon is green while running, amber when a line is
 down, and grey when paused. Hover for the total speed. **Left-click** the
 icon (or choose "Open duolink" in the menu) for the status window: a table
-of each line's state, speed, connections and sticky destinations, the per-app
+of each line's state, weight (`Auto` when measured), speed, connections and
+sticky destinations, and the adapter's whole download as Windows counts it
+(`PC down`, all apps), the per-app
 rule counts, and the recent events (lines going down and up, pauses). Closing
 the window with X just hides it; duolink keeps running in the tray.
 **Right-click** for the menu with each line's state and speed, and:
@@ -165,7 +168,8 @@ invalid settings are reported as errors.
 
 ```json
 {
-  "weights": { "eth": 1, "wifi": 1 },
+  "auto_weights": true,
+  "weights": {},
   "sticky": { "enabled": true, "minutes": 10 },
   "health": {
     "interval_seconds": 15,
@@ -185,7 +189,8 @@ invalid settings are reported as errors.
 
 | Setting | Meaning |
 |---|---|
-| `weights` | Share of new flows per line. Empty = 1 for every line. Lines not listed get 0 (unused). |
+| `auto_weights` | With no `weights` set: each line's share of new flows follows its measured speed. duolink tracks the best speed each line has shown (holding it while the line is idle) and gives the fastest line 100 and the others their fraction (at least 5). All lines are equal until each has carried some traffic. On by default. |
+| `weights` | Fixed share of new flows per line, e.g. `{"eth": 2, "wifi": 1}`; setting any turns `auto_weights` off. Lines not listed get 0 (unused). Empty with `auto_weights` off = 1 for every line. |
 | `sticky` | A destination IP that got a flow in the last `minutes` keeps using the same line, so sites and game servers see one public IP. |
 | `health` | Every `interval_seconds`, duolink TCP-connects to all `targets` at once through each line (no data is sent); one answer within `timeout_seconds` is enough. A line goes DOWN after `failures_before_down` failed checks in a row (a busy line can miss one), or at once when its adapter disconnects. A DOWN line gets no new flows and is re-checked every `down_interval_seconds`. |
 | `processes` | Per-app rules, by exe file name (case doesn't matter). See below. |

@@ -49,3 +49,24 @@ func TestFormatStoppedAndEventOrder(t *testing.T) {
 		t.Errorf("should list exactly the last %d events:\n%s", maxEvents, out)
 	}
 }
+
+func TestFormatAutoWeightsAndPCTraffic(t *testing.T) {
+	s := State{Running: true, Stats: engine.Stats{
+		AutoWeights: true,
+		Lines: []engine.LineStats{
+			{Name: "Ethernet", State: "UP", Weight: 100, DownMbps: 20, PCDownMbps: 22.5},
+			{Name: "Wi-Fi", State: "UP", Weight: 48, DownMbps: 10, PCDownMbps: 10.25},
+		},
+		DownMbps: 30,
+	}}
+	out := Format(s)
+	for _, want := range []string{"Auto", "PC down", "22.5", "32.8", "fastest line 100"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	s.Stats.AutoWeights = false
+	if out := Format(s); strings.Contains(out, "fastest line 100") || !strings.Contains(out, "Weight") {
+		t.Errorf("fixed weights should show the Weight column without the auto note:\n%s", out)
+	}
+}

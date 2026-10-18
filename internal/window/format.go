@@ -27,11 +27,22 @@ func Format(s State) string {
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\r\n", args...) }
 
 	if s.Running && len(s.Stats.Lines) > 0 {
-		line("%-12s %-5s %6s %12s %10s %5s %5s %8s %7s", "Line", "State", "Weight", "Down Mbit/s", "Up Mbit/s", "TCP", "UDP", "Flows", "Sticky")
-		for _, l := range s.Stats.Lines {
-			line("%-12s %-5s %6d %12.1f %10.1f %5d %5d %8d %7d", l.Name, l.State, l.Weight, l.DownMbps, l.UpMbps, l.TCP, l.UDP, l.Flows, l.Sticky)
+		weight := "Weight"
+		if s.Stats.AutoWeights {
+			weight = "Auto" // 5..100 from measured speed
 		}
-		line("%-12s %-5s %6s %12.1f %10.1f", "Total", "", "", s.Stats.DownMbps, s.Stats.UpMbps)
+		line("%-12s %-5s %6s %12s %10s %5s %5s %8s %7s %8s", "Line", "State", weight, "Down Mbit/s", "Up Mbit/s", "TCP", "UDP", "Flows", "Sticky", "PC down")
+		var pc float64
+		for _, l := range s.Stats.Lines {
+			line("%-12s %-5s %6d %12.1f %10.1f %5d %5d %8d %7d %8.1f", l.Name, l.State, l.Weight, l.DownMbps, l.UpMbps, l.TCP, l.UDP, l.Flows, l.Sticky, l.PCDownMbps)
+			pc += l.PCDownMbps
+		}
+		line("%-12s %-5s %6s %12.1f %10.1f %5s %5s %8s %7s %8.1f", "Total", "", "", s.Stats.DownMbps, s.Stats.UpMbps, "", "", "", "", pc)
+		line("")
+		line("PC down: the adapter's whole download as Windows counts it, all apps.")
+		if s.Stats.AutoWeights {
+			line("Auto: shares from measured speed, fastest line 100 (equal until measured).")
+		}
 		if s.Stats.Rules != "" {
 			line("")
 			line("%s", s.Stats.Rules)
