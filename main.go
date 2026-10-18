@@ -5,6 +5,8 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/eagtf/duolink/internal/guiexe"
 )
 
 const usage = `usage:
@@ -20,12 +22,24 @@ const usage = `usage:
                                             routing table before cleaning up
   duolink config [--init] [run flags]     print the effective config (defaults < duolink.json < flags)
                                           --init: write the defaults to duolink.json
+  duolink tray [--config file]            run in the system tray, no console (admin);
+                                          returns at once, logs to duolink.log
+  duolink autostart on|off|status         start the tray at logon, elevated (admin for on/off)
   duolink cleanup                         remove routes left behind by a crash (admin)
   duolink debug route <ip>...             show which interface Windows routes <ip> to
                                           (read-only: changes nothing)
 `
 
 func main() {
+	if len(os.Args) < 2 {
+		// The windowed copy (duolinkw.exe) only exists for the tray, and has
+		// nowhere to print usage; double-clicking it starts the tray.
+		if exe, err := os.Executable(); err == nil {
+			if gui, _ := guiexe.IsGUI(exe); gui {
+				os.Args = append(os.Args, "tray")
+			}
+		}
+	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -40,6 +54,10 @@ func main() {
 		err = cmdCleanup()
 	case "config":
 		err = cmdConfig(os.Args[2:])
+	case "tray":
+		err = cmdTray(os.Args[2:])
+	case "autostart":
+		err = cmdAutostart(os.Args[2:])
 	case "debug":
 		err = cmdDebug(os.Args[2:])
 	default:

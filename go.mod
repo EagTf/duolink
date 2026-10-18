@@ -3,6 +3,7 @@ module github.com/eagtf/duolink
 go 1.27.2
 
 require (
+	fyne.io/systray v1.12.2
 	github.com/xjasonlyu/tun2socks/v2 v2.7.0
 	golang.org/x/sys v0.49.0
 	golang.zx2c4.com/wireguard v0.0.0-20261006164505-2631ce99a06f
@@ -10,6 +11,7 @@ require (
 )
 
 require (
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	golang.org/x/exp v0.0.0-20260611194520-c48552f49976 // indirect
 	golang.org/x/net v0.56.0 // indirect

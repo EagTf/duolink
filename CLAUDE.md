@@ -20,7 +20,7 @@ gofmt -l .                 # must print nothing
 ```
 
 Safe for Claude to run (read-only): `duolink list`, `duolink config`,
-`duolink debug route <ip>`, and the unprivileged error paths of the other
+`duolink debug route <ip>`, `duolink autostart status`, and the unprivileged error paths of the other
 commands. `duolink list --ip` makes outbound requests; only run it when asked.
 
 ## Layout
@@ -45,8 +45,10 @@ the package table in docs/architecture.md). Where new code goes:
 
 ## Rules
 
-- **Never run `duolink run`, `duolink cleanup`, `netsh`, `route add/delete`, or
-  anything else that changes routing or adapters.** The user tests on their own
+- **Never run `duolink run`, `duolink tray`, `duolink cleanup`,
+  `duolink autostart on|off`, `netsh`, `schtasks /create|/delete`, `route
+  add/delete`, or anything else that changes routing, adapters or scheduled
+  tasks.** Also never start `duolinkw.exe` (it asks for elevation). The user tests on their own
   PC. Build, vet and test, then hand over a test plan.
 - **Work in milestones and stop after each one** so the user can test. Don't
   start the next milestone until told to.
@@ -100,3 +102,11 @@ Follow this at the end of every milestone:
   Flow goroutines recover.
 - netsh's interface arguments use the IPv4 interface index, not the name, to
   avoid quoting and localization issues.
+- Console tools (netsh, schtasks, route, powershell) must be started with
+  `winexec.Command`, never plain `exec.Command`: from the windowed
+  `duolinkw.exe` each one would otherwise flash a console window.
+- `engine.Start` cleans up after a failed start in a deferred function; it
+  must use its own engine variable, not the named result (`return nil, err`
+  clears that before deferred functions run).
+- `.gitattributes` keeps files LF in the working tree; with CRLF, gofmt
+  reports every file and multi-line edit patterns don't match.

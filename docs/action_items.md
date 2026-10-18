@@ -6,12 +6,33 @@
 
 ## Open tests
 
+- [ ] Autostart at logon: tick "Start with Windows", sign out and in; the
+  tray should appear by itself, elevated, no UAC prompt, no console window
+  (docs/testing.md, Tray app step 10).
+
 - [ ] Crash test: `duolink run`, then `taskkill /f /im duolink.exe`, then
   `duolink cleanup`. Confirm whether the Wintun adapter and its routes vanish
   with the process (expected) or `cleanup` reports a leftover adapter.
 - [ ] Single-line runs: `--weights eth=1,wifi=0` and `--weights eth=0,wifi=1`.
 
 ## Known issues
+
+- **Health probes can mark a busy line DOWN.** Seen in the milestone 9 test:
+  during a Steam download, Wi-Fi was marked DOWN twice within a minute (both
+  probe targets timed out after 3 s) and came back seconds later; the adapter
+  never disconnected. Likely a saturated line: router buffers fill, latency
+  spikes past the 3 s probe timeout. The false DOWN sends new flows to the
+  other line only, lowering the total. Planned fix: interval probes need 2
+  consecutive failures before DOWN (the failed-dial trigger already confirms
+  with a probe), and/or a longer default `timeout_seconds`.
+
+- After rebuilding, the logon task keeps running the old `duolinkw.exe` until
+  `duolink tray` (or `duolink autostart on`) is run once to refresh it.
+  The tray could notice a newer `duolink.exe` next to it and say so.
+- The tray shows a dialog when a second copy starts, but doesn't bring the
+  first one's menu up. Milestone 10's window could be shown instead.
+- `duolinkw.exe` is an unsigned exe written at runtime; some antivirus
+  products may look at it more closely than at `duolink.exe`. Not seen so far.
 
 - **Stickiness blocks rebalancing after a failover.** While a line is DOWN,
   its destinations move to the other line and stick there. The sticky timer

@@ -29,3 +29,7 @@ desktop.ini
 
 # Local Claude Code settings (permissions, per machine)
 .claude/settings.local.json
+
+# Windowed copy of duolink.exe left over while the tray ran
+*.exe.old
+*.exe.new

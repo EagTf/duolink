@@ -1,0 +1,6 @@
+# Always LF in the working tree, whatever core.autocrlf says: gofmt expects LF,
+# and the repo stores LF anyway.
+* text=auto eol=lf
+*.exe binary
+*.dll binary
+*.ico binary

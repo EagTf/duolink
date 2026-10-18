@@ -127,6 +127,56 @@ which line the browser's connections use (reload with Ctrl+F5). Replace
    `process rules: none`, no rules line in the stats, everything balanced as
    in milestone 6.
 
+## Tray app
+
+Build with `go build`, then in an **admin** terminal:
+
+1. **Start.** `duolink tray`: prints `updated duolinkw.exe ...` (first time)
+   and `duolink is starting in the tray`, and the prompt comes back at once.
+   No console window appears. Within a few seconds the icon turns green;
+   hover shows `duolink ↓ … ↑ … Mbit/s` and both lines UP.
+2. **Menu.** Right-click: status `Running`, one row per line with state and
+   speeds (updating every 2 s during a download), a Total row, Pause, Start
+   with Windows, Open log, Quit.
+3. **Log.** Open log: notepad shows the startup (uplinks, netsh commands,
+   self-check `ok` lines). No console windows flashed during startup.
+4. **Pause / Start.** Pause: icon grey, status `Paused`; `route print -4`
+   shows no `/1` routes and browsing works normally. Start: green again. Edit
+   duolink.json (e.g. a pin) while paused; after Start, the log shows the new
+   rules.
+5. **Line down.** Unplug Ethernet: icon amber, status `Running: a line is
+   DOWN`, Ethernet row DOWN. Replug: green again.
+6. **Single instance.** Run `duolink tray` again: a dialog says it's already
+   running. `duolink run` in the terminal: refused with "already running (in
+   the tray ...)".
+7. **Quit.** Quit: icon disappears; log ends with route removal and `quit`;
+   `route print -4` clean.
+8. **Not elevated.** From a normal (non-admin) terminal, `duolink tray`
+   refuses with a message. Double-clicking `duolinkw.exe` in Explorer (or
+   `duolinkw.exe tray` from a normal terminal) shows the UAC prompt; after
+   Yes the tray starts; after No a dialog explains.
+9. **Retry.** Disconnect Wi-Fi, start the tray: status `Not running: need at
+   least 2 usable uplinks ... (retrying)`, grey icon. Reconnect Wi-Fi: within
+   about 10 s it starts by itself. The log shows the error once, not every
+   10 s.
+10. **Autostart.** Tray menu → Start with Windows (gets a tick), or
+    `duolink autostart on`. `duolink autostart status` says on; Task
+    Scheduler shows task `duolink` (Run with highest privileges; Conditions:
+    no AC-power restriction; Settings: no "stop if runs longer than").
+    Sign out and in (or reboot): the tray starts by itself, no UAC prompt,
+    no console window. `duolink autostart off` removes the task.
+11. **Cleanup refuses while running.** With the tray running,
+    `duolink cleanup` (admin) refuses with "duolink is running ...", and the
+    routes stay. After Quit, `duolink cleanup` works as before.
+12. **No retry loop after a late failure.** Hard to trigger on purpose; if a
+    start ever fails after "created adapter" (e.g. a self-check failure),
+    the status shows `... (see log; Start tries again)`, the toggle says
+    Start, and the log shows exactly one attempt, not one every 10 s.
+13. **Rebuild while running.** With the tray running, `go build` and then
+    `duolink tray`: prints `updated duolinkw.exe` (the running copy is moved
+    to `duolinkw.exe.old`) and says it's already running. After Quit and
+    `duolink tray`, the new build runs.
+
 ## Stickiness
 
 1. Default run: `sticky dsts` grows on both lines while browsing.
