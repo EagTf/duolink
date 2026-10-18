@@ -28,9 +28,10 @@ import (
 // Options configure one run of the engine.
 type Options struct {
 	Config     config.Config
-	KeepOnFail bool          // dump the routing table if the self-check fails
-	OnStats    func(Stats)   // called every StatsEvery while running
-	StatsEvery time.Duration // default 2 s
+	KeepOnFail bool              // dump the routing table if the self-check fails
+	OnStats    func(Stats)       // called every StatsEvery while running
+	OnEvent    func(line string) // health and failover events (DOWN, back UP, ...)
+	StatsEvery time.Duration     // default 2 s
 }
 
 // Engine is one running instance. Everything it prints goes to stdout,
@@ -115,6 +116,9 @@ func Start(o Options) (_ *Engine, err error) {
 		fmt.Println("note: only one uplink has a non-zero weight, so nothing is being combined")
 	}
 	e.bal = balance.New(e.ups, e.weights, cfg)
+	if o.OnEvent != nil {
+		e.bal.OnLog(o.OnEvent)
+	}
 	if ttl := cfg.StickyTTL(); ttl > 0 {
 		fmt.Printf("stickiness: on, a destination stays on its line for %v after its last new flow\n", ttl)
 	} else {

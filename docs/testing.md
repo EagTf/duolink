@@ -60,6 +60,33 @@ if something breaks your connection.
    Expect `Ethernet is DOWN`, new flows only on Wi-Fi, the download continues.
    Replug: `Ethernet is back UP` within about 4 s.
 
+## Status window
+
+With the tray running (`duolink tray`, admin terminal):
+
+1. **Open.** Left-click the tray icon: the window appears in front, titled
+   duolink, with the tray icon in its title bar. Right-click still opens the
+   menu; "Open duolink" at its top opens the window too.
+2. **Contents.** Status line (`Running`), a table with one row per line
+   (state, weight, down/up Mbit/s, TCP, UDP, flows, sticky), a Total row,
+   the per-app rules line, and "Recent events" with `running` at least.
+   During a download the numbers change every 2 s.
+3. **Hide, not quit.** Click X: the window disappears, the tray icon stays
+   green, and duolink keeps balancing (`route print` still shows the /1
+   routes). Left-click the icon: the window comes back.
+4. **Buttons.** Pause: status `Paused`, table replaced by "not balancing",
+   button turns into Start, a `paused` event appears, icon grey. Start:
+   running again. Open log: notepad with duolink.log.
+5. **Events.** Unplug Ethernet: `Ethernet is DOWN (...)` appears at the top
+   of Recent events within a second, status `Running: a line is DOWN`.
+   Replug: `Ethernet is back UP`.
+6. **Second start.** In the admin terminal, `duolink tray` again: no
+   "already running" dialog; the running tray's window comes to the front.
+7. **Quit from the window.** Quit: window and tray icon disappear, routes
+   are removed as with the menu's Quit.
+8. **Scaled display** (if you have one, e.g. 125 % or 150 %): text is sharp,
+   not blurry, and nothing is cut off.
+
 ## Instant failover
 
 Run `duolink run --for 10m` and keep a download going (Steam, or several

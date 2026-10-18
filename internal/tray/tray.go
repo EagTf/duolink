@@ -1,6 +1,7 @@
 // Package tray is duolink's system tray app: an icon whose colour shows the
-// state, live speeds in the tooltip and menu, Pause/Start, "Start with
-// Windows", the log, and Quit (which cleans up like Ctrl+C in the CLI).
+// state, live speeds in the tooltip and menu, a status window, Pause/Start,
+// "Start with Windows", the log, and Quit (which cleans up like Ctrl+C in the
+// CLI).
 package tray
 
 import (
@@ -17,6 +18,7 @@ import (
 	"github.com/eagtf/duolink/internal/autostart"
 	"github.com/eagtf/duolink/internal/config"
 	"github.com/eagtf/duolink/internal/engine"
+	"github.com/eagtf/duolink/internal/window"
 )
 
 // Options for the tray.
@@ -30,6 +32,7 @@ type Options struct {
 const (
 	retryEvery = 10 * time.Second // retry interval while Start keeps failing
 	maxLines   = 4                // menu rows reserved for uplinks
+	keepEvents = 50               // recent events kept for the window
 )
 
 type app struct {
@@ -39,28 +42,47 @@ type app struct {
 	want    bool           // the user wants it running (Start), or not (Pause)
 	eng     *engine.Engine // non-nil while running
 	stopped bool           // Quit was chosen
+	lastErr string         // last start error, so repeated retries log it once
 
-	kick    chan struct{} // wake the controller now
-	lastErr string        // last start error, so repeated retries log it once (guarded by mu)
-	startMu sync.Mutex    // held while a start is in progress, so Quit can wait for it
+	// What the window shows; guarded by mu.
+	status, toggle string
+	stats          engine.Stats
+	live           bool // stats is from the running engine
+	events         []string
 
+	kick     chan struct{} // wake the controller now
+	startMu  sync.Mutex    // held while a start is in progress, so Quit can wait for it
+	quitOnce sync.Once
+
+	win                       *window.Window // nil if the window couldn't be created
 	icons                     map[string][]byte
-	mStatus, mTotal           *systray.MenuItem
+	mOpen, mStatus, mTotal    *systray.MenuItem
 	mLines                    [maxLines]*systray.MenuItem
 	mToggle, mAuto, mLog, mQt *systray.MenuItem
 }
 
 // Run shows the tray icon and runs duolink until Quit. It blocks.
 func Run(o Options) {
+	// Before any window exists (the tray creates one too): sharp text on
+	// scaled displays.
+	window.EnableDPIAwareness()
 	a := &app{
-		o:    o,
-		want: true, // starting the tray means "run"
-		kick: make(chan struct{}, 1),
+		o:      o,
+		want:   true, // starting the tray means "run"
+		status: "Starting…",
+		toggle: "Pause",
+		kick:   make(chan struct{}, 1),
 		icons: map[string][]byte{
 			"running": makeIcon(colorRunning),
 			"warning": makeIcon(colorWarning),
 			"stopped": makeIcon(colorStopped),
 		},
+	}
+	w, err := window.New(window.Actions{Toggle: a.toggleRunning, OpenLog: a.openLog, Quit: a.quit}, a.icons["running"])
+	if err != nil {
+		fmt.Println("status window unavailable:", err) // the tray works without it
+	} else {
+		a.win = w
 	}
 	systray.Run(a.onReady, func() {})
 }
@@ -68,7 +90,11 @@ func Run(o Options) {
 func (a *app) onReady() {
 	systray.SetIcon(a.icons["stopped"])
 	systray.SetTooltip("duolink: starting")
+	// Left click opens the window; right click shows the menu.
+	systray.SetOnTapped(a.showWindow)
 
+	a.mOpen = systray.AddMenuItem("Open duolink", "Show the status window")
+	systray.AddSeparator()
 	a.mStatus = systray.AddMenuItem("Starting…", "")
 	a.mStatus.Disable()
 	for i := range a.mLines {
@@ -86,6 +112,7 @@ func (a *app) onReady() {
 	systray.AddSeparator()
 	a.mQt = systray.AddMenuItem("Quit", "Stop duolink, restore normal routing and close")
 
+	a.pushWindow()
 	go a.controller()
 	go a.clicks()
 }
@@ -120,14 +147,14 @@ func (a *app) start() {
 		a.failed(fmt.Errorf("config error: %w", err), true)
 		return
 	}
-	a.mStatus.SetTitle("Starting…")
+	a.setStatus("Starting…")
 	a.mu.Lock()
 	quiet := a.lastErr != "" // a retry of the same failure stays quiet
 	a.mu.Unlock()
 	if !quiet {
 		fmt.Printf("\n=== %s starting\n", time.Now().Format("2006-01-02 15:04:05"))
 	}
-	eng, err := engine.Start(engine.Options{Config: cfg, OnStats: a.onStats})
+	eng, err := engine.Start(engine.Options{Config: cfg, OnStats: a.onStats, OnEvent: a.addEvent})
 	if err != nil {
 		a.failed(err, engine.Retryable(err))
 		return
@@ -145,7 +172,8 @@ func (a *app) start() {
 		fmt.Printf("=== %s started after retrying\n", time.Now().Format("2006-01-02 15:04:05"))
 	}
 	fmt.Println("running")
-	a.mStatus.SetTitle("Running")
+	a.addEvent(ts() + " running")
+	a.setStatus("Running")
 	systray.SetIcon(a.icons["running"])
 	systray.SetTooltip("duolink: running")
 }
@@ -166,7 +194,10 @@ func (a *app) failed(err error, canRetry bool) {
 	}
 	a.mu.Unlock()
 	if !retry {
-		a.mToggle.SetTitle("Start")
+		a.setToggle("Start")
+	}
+	if err != nil {
+		a.addEvent(ts() + " not running: " + firstLine(err))
 	}
 	a.showStopped(status, err)
 }
@@ -198,7 +229,7 @@ func (a *app) stop() {
 	a.eng = nil
 	a.mu.Unlock()
 	if eng != nil {
-		a.mStatus.SetTitle("Stopping…")
+		a.setStatus("Stopping…")
 		fmt.Printf("\n=== %s stopping\n", time.Now().Format("2006-01-02 15:04:05"))
 		eng.Stop()
 	}
@@ -207,38 +238,62 @@ func (a *app) stop() {
 func (a *app) clicks() {
 	for {
 		select {
+		case <-a.mOpen.ClickedCh:
+			a.showWindow()
 		case <-a.mToggle.ClickedCh:
-			a.mu.Lock()
-			a.want = !a.want
-			want := a.want
-			if want {
-				a.lastErr = "" // an explicit Start is always logged in full
-			}
-			a.mu.Unlock()
-			if want {
-				a.mToggle.SetTitle("Pause")
-				a.wake()
-			} else {
-				a.mToggle.SetTitle("Start")
-				a.stop()
-				a.showStopped("Paused", nil)
-			}
+			a.toggleRunning()
 		case <-a.mAuto.ClickedCh:
 			a.toggleAutostart()
 		case <-a.mLog.ClickedCh:
-			exec.Command("notepad.exe", a.o.LogPath).Start()
+			a.openLog()
 		case <-a.mQt.ClickedCh:
-			a.mu.Lock()
-			a.stopped, a.want = true, false
-			a.mu.Unlock()
-			// A start in progress finishes first (and then stops itself, since
-			// want is false), so Quit never leaves a half-set-up engine behind.
-			a.startMu.Lock()
-			a.stop()
-			fmt.Println("quit")
-			systray.Quit()
+			a.quit()
 			return
 		}
+	}
+}
+
+// toggleRunning is Pause/Start, from the menu or the window.
+func (a *app) toggleRunning() {
+	a.mu.Lock()
+	a.want = !a.want
+	want := a.want
+	if want {
+		a.lastErr = "" // an explicit Start is always logged in full
+	}
+	a.mu.Unlock()
+	if want {
+		a.setToggle("Pause")
+		a.wake()
+		return
+	}
+	a.setToggle("Start")
+	a.stop()
+	a.addEvent(ts() + " paused")
+	a.showStopped("Paused", nil)
+}
+
+func (a *app) openLog() { exec.Command("notepad.exe", a.o.LogPath).Start() }
+
+// quit stops duolink and closes the tray. The menu and the window can both
+// ask; it runs once.
+func (a *app) quit() {
+	a.quitOnce.Do(func() {
+		a.mu.Lock()
+		a.stopped, a.want = true, false
+		a.mu.Unlock()
+		// A start in progress finishes first (and then stops itself, since
+		// want is false), so Quit never leaves a half-set-up engine behind.
+		a.startMu.Lock()
+		a.stop()
+		fmt.Println("quit")
+		systray.Quit()
+	})
+}
+
+func (a *app) showWindow() {
+	if a.win != nil {
+		a.win.Show()
 	}
 }
 
@@ -267,10 +322,13 @@ func (a *app) wake() {
 	}
 }
 
-// onStats updates the menu, tooltip and icon from an engine sample.
+// onStats updates the menu, tooltip, icon and window from an engine sample.
 func (a *app) onStats(s engine.Stats) {
 	a.mu.Lock()
 	running := a.eng != nil
+	if running {
+		a.stats, a.live = s, true
+	}
 	a.mu.Unlock()
 	if !running {
 		return // a late sample from an engine that is stopping
@@ -293,7 +351,7 @@ func (a *app) onStats(s engine.Stats) {
 	if s.AnyDown() {
 		icon, status = "warning", "Running: a line is DOWN"
 	}
-	a.mStatus.SetTitle(status)
+	a.setStatus(status) // also pushes the new stats to the window
 	systray.SetIcon(a.icons[icon])
 	// Windows cuts tray tooltips at 127 characters.
 	tip := fmt.Sprintf("duolink ↓ %.1f ↑ %.1f Mbit/s\n%s", s.DownMbps, s.UpMbps, strings.Join(states, ", "))
@@ -307,7 +365,10 @@ func (a *app) showStopped(status string, err error) {
 	if err != nil {
 		fmt.Println("error:", err)
 	}
-	a.mStatus.SetTitle(status)
+	a.mu.Lock()
+	a.live = false
+	a.mu.Unlock()
+	a.setStatus(status)
 	for _, m := range a.mLines {
 		m.Hide()
 	}
@@ -315,6 +376,55 @@ func (a *app) showStopped(status string, err error) {
 	systray.SetIcon(a.icons["stopped"])
 	systray.SetTooltip("duolink: " + strings.ToLower(status[:1]) + status[1:])
 }
+
+// setStatus sets the status line in the menu and the window.
+func (a *app) setStatus(s string) {
+	a.mStatus.SetTitle(s)
+	a.mu.Lock()
+	a.status = s
+	a.mu.Unlock()
+	a.pushWindow()
+}
+
+// setToggle sets the Pause/Start label in the menu and the window.
+func (a *app) setToggle(label string) {
+	a.mToggle.SetTitle(label)
+	a.mu.Lock()
+	a.toggle = label
+	a.mu.Unlock()
+	a.pushWindow()
+}
+
+// addEvent records a line for the window's "Recent events" list (health
+// changes from the engine, and the tray's own start/pause/failure).
+func (a *app) addEvent(line string) {
+	a.mu.Lock()
+	a.events = append(a.events, line)
+	if len(a.events) > keepEvents {
+		a.events = a.events[len(a.events)-keepEvents:]
+	}
+	a.mu.Unlock()
+	a.pushWindow()
+}
+
+// pushWindow sends the current state to the window.
+func (a *app) pushWindow() {
+	if a.win == nil {
+		return
+	}
+	a.mu.Lock()
+	s := window.State{
+		Status:      a.status,
+		ToggleLabel: a.toggle,
+		Running:     a.live,
+		Stats:       a.stats,
+		Events:      append([]string(nil), a.events...),
+	}
+	a.mu.Unlock()
+	a.win.Update(s)
+}
+
+func ts() string { return time.Now().Format("15:04:05") }
 
 func firstLine(err error) string {
 	s := err.Error()

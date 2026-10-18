@@ -29,8 +29,6 @@
 - After rebuilding, the logon task keeps running the old `duolinkw.exe` until
   `duolink tray` (or `duolink autostart on`) is run once to refresh it.
   The tray could notice a newer `duolink.exe` next to it and say so.
-- The tray shows a dialog when a second copy starts, but doesn't bring the
-  first one's menu up. Milestone 10's window could be shown instead.
 - `duolinkw.exe` is an unsigned exe written at runtime; some antivirus
   products may look at it more closely than at `duolink.exe`. Not seen so far.
 
@@ -76,6 +74,10 @@
   runs. The tray app (milestone 9) replaces this.
 
 ## Ideas
+
+- Status window: remember its position; per-monitor DPI (it uses the
+  system DPI, so on a second monitor with a different scale Windows
+  stretches it); a speed graph.
 
 - Per-process rules (milestone 8) could also cover game traffic: pin game
   executables to the lower-latency line.

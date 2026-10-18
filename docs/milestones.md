@@ -147,6 +147,26 @@ Tested (steps in docs/testing.md, "Tray app"):
 - No retry loop after a late failure: covered by unit tests (can't be
   triggered safely by hand).
 
+## Awaiting test
+
+### 10. Status window
+Status: awaiting test.
+Delivered:
+- `internal/window`: a small native Win32 window (no GUI framework, no cgo)
+  on its own message-loop thread: status line, a table per line (state,
+  weight, down/up, TCP/UDP, flows, sticky destinations), totals, per-app
+  rule counts, recent events (newest first), and Pause/Start, Open log and
+  Quit buttons. Current Windows button style via an activation context;
+  DPI-aware text; white text area.
+- Opens with a left click on the tray icon or "Open duolink" in the menu.
+  X hides it to the tray; only Quit exits. A second `duolink tray` shows the
+  running tray's window instead of the "already running" dialog.
+- Health and failover events reach the window through an engine `OnEvent`
+  hook (`Balancer.OnLog`), alongside the tray's start/pause/failure events.
+- Tests: text formatting, the real window created hidden and found by class
+  name, the event hook. Layout checked by rendering the window off-screen.
+Tested: (pending)
+
 ## Planned
 
 | # | Milestone | Status |
@@ -154,5 +174,5 @@ Tested (steps in docs/testing.md, "Tray app"):
 | 7 | Instant failover: mark a line DOWN as soon as its adapter disconnects, or probe at once after 2 failed dials to different destinations | done (partially tested) |
 | 8 | Per-process rules via `GetExtendedTcpTable` / `GetExtendedUdpTable` (flow's local port → PID → exe): `sticky_exempt` (default `["steam.exe"]`), `pin` (process → line, with fallback when that line is down), `exclude` (not balanced). Configured in duolink.json | done (partially tested) |
 | 9 | System tray app: `duolink tray`, no console, Start/Pause, speeds, Quit with cleanup, single instance, autostart via Task Scheduler with highest privileges | done (logon start pending) |
-| 10 | Small window opened from the tray; X hides it to the tray, only Quit exits | next |
+| 10 | Small window opened from the tray; X hides it to the tray, only Quit exits | awaiting test |
 | later | Metered/phone lines with a data cap; hot-plugging uplinks; automatic weights from passive throughput measurement; IPv6 | ideas |

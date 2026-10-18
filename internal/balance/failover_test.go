@@ -220,3 +220,14 @@ func TestAdapterIssueWhileAlreadyDownIsLogged(t *testing.T) {
 		t.Errorf("log = %q", l)
 	}
 }
+
+func TestOnLogHook(t *testing.T) {
+	eth, wifi, ups := testUplinks()
+	b := New(ups, map[*netif.Adapter]int{eth: 1, wifi: 1}, noSticky())
+	var got []string
+	b.OnLog(func(line string) { got = append(got, line) })
+	b.setDown(b.link(eth), "adapter disconnected")
+	if len(got) != 1 || !strings.Contains(got[0], "Ethernet is DOWN (adapter disconnected)") {
+		t.Errorf("hook got %q", got)
+	}
+}

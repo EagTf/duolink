@@ -3,6 +3,19 @@
 Not released yet. Entries are by milestone; see
 [docs/milestones.md](docs/milestones.md) for test results.
 
+## Milestone 10: status window
+
+- A small window with the live state: a table per line (state, weight,
+  down/up speed, TCP/UDP flows, flows assigned, sticky destinations),
+  totals, per-app rule counts and recent events (DOWN, back UP, pause,
+  failures), plus Pause/Start, Open log and Quit buttons.
+- Open it with a left click on the tray icon or "Open duolink" in the menu.
+  X hides it to the tray; only Quit exits.
+- Starting `duolink tray` again shows the running tray's window instead of
+  the "already running" dialog.
+- Native Win32 window, no new dependencies; current Windows look and sharp
+  text on scaled displays.
+
 ## Repository: CI and protected main
 
 - GitHub Actions CI on Windows for every PR and push to `main`: gofmt,
