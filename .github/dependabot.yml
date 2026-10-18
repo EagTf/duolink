@@ -1,0 +1,15 @@
+# Weekly update PRs for Go modules and the pinned GitHub Actions. They go
+# through CI and the main branch rule like any other PR.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

@@ -3,6 +3,16 @@
 Not released yet. Entries are by milestone; see
 [docs/milestones.md](docs/milestones.md) for test results.
 
+## Repository: CI and protected main
+
+- GitHub Actions CI on Windows for every PR and push to `main`: gofmt,
+  `go vet`, `go test`, `go build` (job `test`), plus `govulncheck`. Actions
+  are pinned to commit SHAs; the workflow token is read-only.
+- `main` only changes through pull requests that pass `test` and are up to
+  date with `main`; no force-pushes or deletion; applies to everyone.
+- Dependabot: vulnerability alerts, security-fix PRs, and weekly update PRs
+  for Go modules and the pinned actions.
+
 ## Milestone 9: system tray app
 
 - `duolink tray`: runs duolink in the system tray with no console window.

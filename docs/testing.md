@@ -1,5 +1,8 @@
 # Manual test plan
 
+CI runs the unit tests (and gofmt, vet, build) on Windows for every pull
+request; a PR can only merge into `main` when they pass.
+
 Unit tests (`go test ./...`) cover the pure logic: WRR order, health
 fallback, stickiness and expiry, weight parsing, config loading and flag
 overrides, overlap warnings. Everything that touches Windows networking is

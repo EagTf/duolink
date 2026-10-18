@@ -1,5 +1,7 @@
 # duolink
 
+[![CI](https://github.com/EagTf/duolink/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/EagTf/duolink/actions/workflows/ci.yml)
+
 Use several internet connections on one Windows PC at the same time.
 
 duolink spreads your PC's connections across all your network adapters, for

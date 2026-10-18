@@ -50,6 +50,11 @@ the package table in docs/architecture.md). Where new code goes:
   add/delete`, or anything else that changes routing, adapters or scheduled
   tasks.** Also never start `duolinkw.exe` (it asks for elevation). The user tests on their own
   PC. Build, vet and test, then hand over a test plan.
+- **`main` only changes through pull requests.** A rule on GitHub blocks
+  direct pushes, force-pushes and deletion, for everyone including the owner,
+  and requires the CI `test` job (gofmt, vet, test, build on Windows) to pass
+  and the branch to be up to date. Work on a branch, push it, open a PR. Never
+  try to get around the rule (no `--force`, no disabling it).
 - **Work in milestones and stop after each one** so the user can test. Don't
   start the next milestone until told to.
 - **Routes are always added with `store=active`** (non-persistent), so a reboot
@@ -73,7 +78,8 @@ the package table in docs/architecture.md). Where new code goes:
 
 Follow this at the end of every milestone:
 
-1. `gofmt -l .` prints nothing; `go vet`, `go test` and the build pass.
+1. `gofmt -l .` prints nothing; `go vet`, `go test` and the build pass. (CI checks
+   the same on every PR; run them locally first anyway.)
 2. Update CHANGELOG.md, docs/milestones.md (status → "awaiting test"),
    docs/testing.md (steps for this feature), and docs/architecture.md /
    docs/decisions.md if anything changed. Add new to-dos to
