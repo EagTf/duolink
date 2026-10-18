@@ -151,10 +151,15 @@ it's only for leftovers after a crash.
 
 ## Configuration: duolink.json
 
-Optional. Put `duolink.json` next to `duolink.exe` (`duolink config --init` writes
-one with all defaults). It only needs the settings you want to change.
-Command-line flags override it. Unknown or invalid settings are reported as
-errors.
+The easiest way to change settings is the tray app: **Settings** in the
+status window (or "Settings…" in the tray menu) shows every option with an
+explanation, checks your changes, saves them to `duolink.json` and restarts
+duolink with them.
+
+You can also edit the file by hand. Put `duolink.json` next to `duolink.exe`
+(`duolink config --init` writes one with all defaults). It only needs the
+settings you want to change. Command-line flags override it. Unknown or
+invalid settings are reported as errors.
 
 ```json
 {

@@ -8,7 +8,7 @@ import (
 // Creates the real window (it starts hidden, so nothing appears on screen)
 // and checks a second `duolink tray` could find it by its class name.
 func TestNewCreatesHiddenFindableWindow(t *testing.T) {
-	w, err := New(Actions{}, makeTestIcon())
+	w, err := New(Actions{}, SettingsHooks{}, makeTestIcon())
 	if err != nil {
 		t.Fatal(err)
 	}

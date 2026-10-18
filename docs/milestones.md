@@ -181,6 +181,31 @@ Tested (steps in docs/testing.md, "Status window"), all passed:
 - Requested during the test: edit the settings from the window, so it's
   the full app. Planned as milestone 11.
 
+## Awaiting test
+
+### 11. Settings in the window
+Status: awaiting test.
+Delivered:
+- A Settings window (status window button, or "Settings…" in the tray
+  menu) with every option in duolink.json and a short explanation per
+  section: a weight per connected line, stickiness, health checks
+  (intervals, timeout, misses before DOWN, targets), UDP idle timeout, and
+  the per-app rules as three lists (balance every connection, never
+  balance, pin `exe = line`).
+- Save and apply: the form is checked first (numbers, the same validation
+  as loading the file, and against the real lines, e.g. a pin to a line
+  that doesn't exist); errors show in red in the window's own words and
+  nothing is written. Then duolink.json is written atomically
+  (`config.Save`: temp file + rename) and duolink restarts with it if it
+  was running (if paused, it applies on Start).
+- Weights all 1 are saved as no weights (`{}`), so the file keeps working
+  when a line is renamed or replaced (e.g. a new Wi-Fi adapter).
+- Reset to defaults fills the form without saving; Cancel or X discards.
+- Tests: form <-> config conversion (prefix-matched weights, rule lists,
+  pins, errors in the window's words), `config.Save` (round trip, invalid
+  config leaves the file untouched). Layout checked by rendering off-screen.
+Tested: (pending)
+
 ## Planned
 
 | # | Milestone | Status |
@@ -189,5 +214,5 @@ Tested (steps in docs/testing.md, "Status window"), all passed:
 | 8 | Per-process rules via `GetExtendedTcpTable` / `GetExtendedUdpTable` (flow's local port → PID → exe): `sticky_exempt` (default `["steam.exe"]`), `pin` (process → line, with fallback when that line is down), `exclude` (not balanced). Configured in duolink.json | done (partially tested) |
 | 9 | System tray app: `duolink tray`, no console, Start/Pause, speeds, Quit with cleanup, single instance, autostart via Task Scheduler with highest privileges | done (logon start pending) |
 | 10 | Small window opened from the tray; X hides it to the tray, only Quit exits | done |
-| 11 | Settings in the window, so it's the full app: edit everything in duolink.json (weights, stickiness, health checks, per-app rules) with explanations, validation before saving, and Apply (restarts duolink with the new settings) | next |
+| 11 | Settings in the window, so it's the full app: edit everything in duolink.json (weights, stickiness, health checks, per-app rules) with explanations, validation before saving, and Apply (restarts duolink with the new settings) | awaiting test |
 | later | Metered/phone lines with a data cap; hot-plugging uplinks; automatic weights from passive throughput measurement; IPv6 | ideas |

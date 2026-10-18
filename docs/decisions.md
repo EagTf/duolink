@@ -114,6 +114,18 @@ would keep them away from their line after it recovers.
 only needs what differs, typos fail loudly instead of being ignored, and
 flags allow one-off overrides without editing the file.
 
+**Settings are edited as a form over duolink.json, not a second store.** The
+window reads the file, shows it as fields, and writes it back with the same
+validation as loading it, plus the checks a start does against the real
+lines (so a pin to a missing line is refused at Save, not at the next
+start). The file stays the single source of truth and can still be edited
+by hand. Writes go through a temp file and a rename, so a crash never leaves
+a half-written file. Apply restarts the engine instead of changing it live:
+one well-tested path, and a restart takes a few seconds. Weights that are
+all 1 are saved as none, so replacing an adapter (a new Wi-Fi stick with a
+new name) doesn't break the config. Errors are shown in the window's words,
+not the file's keys.
+
 **The status window is plain Win32, not a GUI toolkit.** Go GUI toolkits
 for Windows either need cgo and OpenGL (Fyne, Gio's drivers), are
 unmaintained (walk), or embed a browser (WebView2). A status window needs a

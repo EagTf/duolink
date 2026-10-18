@@ -16,8 +16,10 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/eagtf/duolink/internal/autostart"
+	"github.com/eagtf/duolink/internal/balance"
 	"github.com/eagtf/duolink/internal/config"
 	"github.com/eagtf/duolink/internal/engine"
+	"github.com/eagtf/duolink/internal/netif"
 	"github.com/eagtf/duolink/internal/window"
 )
 
@@ -56,7 +58,8 @@ type app struct {
 
 	win                       *window.Window // nil if the window couldn't be created
 	icons                     map[string][]byte
-	mOpen, mStatus, mTotal    *systray.MenuItem
+	mOpen, mSettings          *systray.MenuItem
+	mStatus, mTotal           *systray.MenuItem
 	mLines                    [maxLines]*systray.MenuItem
 	mToggle, mAuto, mLog, mQt *systray.MenuItem
 }
@@ -78,7 +81,10 @@ func Run(o Options) {
 			"stopped": makeIcon(colorStopped),
 		},
 	}
-	w, err := window.New(window.Actions{Toggle: a.toggleRunning, OpenLog: a.openLog, Quit: a.quit}, a.icons["running"])
+	w, err := window.New(
+		window.Actions{Toggle: a.toggleRunning, OpenLog: a.openLog, Quit: a.quit},
+		window.SettingsHooks{Load: a.loadSettings, Save: a.saveSettings},
+		a.icons["running"])
 	if err != nil {
 		fmt.Println("status window unavailable:", err) // the tray works without it
 	} else {
@@ -94,6 +100,7 @@ func (a *app) onReady() {
 	systray.SetOnTapped(a.showWindow)
 
 	a.mOpen = systray.AddMenuItem("Open duolink", "Show the status window")
+	a.mSettings = systray.AddMenuItem("Settings…", "Change duolink's settings (duolink.json)")
 	systray.AddSeparator()
 	a.mStatus = systray.AddMenuItem("Starting…", "")
 	a.mStatus.Disable()
@@ -240,6 +247,10 @@ func (a *app) clicks() {
 		select {
 		case <-a.mOpen.ClickedCh:
 			a.showWindow()
+		case <-a.mSettings.ClickedCh:
+			if a.win != nil {
+				a.win.ShowSettings()
+			}
 		case <-a.mToggle.ClickedCh:
 			a.toggleRunning()
 		case <-a.mAuto.ClickedCh:
@@ -455,3 +466,61 @@ func messageBox(text string, flags uint32) {
 
 // Fatal shows an error dialog, for problems before the tray icon exists.
 func Fatal(text string) { messageBox(text, windows.MB_ICONERROR) }
+
+// loadSettings gives the settings window what to show: duolink.json (or the
+// defaults, with a note, if the file has errors) and the lines connected now.
+func (a *app) loadSettings() (config.Config, []string, string) {
+	c, _, err := config.Load(a.o.ConfigPath)
+	note := ""
+	if err != nil {
+		c = config.Default()
+		note = "duolink.json has errors, so the defaults are shown; saving replaces the file:\r\n" +
+			strings.ReplaceAll(err.Error(), "\n", "\r\n")
+	}
+	var lines []string
+	if all, err := netif.List(); err == nil {
+		for _, u := range netif.Uplinks(all) {
+			lines = append(lines, u.Name)
+		}
+	}
+	return c, lines, note
+}
+
+// saveSettings checks c against the lines connected now (the same checks a
+// start does, so a pin to a line that doesn't exist is caught here, not at
+// the next start), writes duolink.json, and restarts duolink if it runs.
+func (a *app) saveSettings(c config.Config) error {
+	all, err := netif.List()
+	if err != nil {
+		return err
+	}
+	ups := netif.Uplinks(all)
+	weights, err := balance.ResolveWeights(c.Weights, ups)
+	if err != nil {
+		return fmt.Errorf("weights: %w", err)
+	}
+	if _, err := balance.ResolveRules(c.Processes, ups, weights); err != nil {
+		return err
+	}
+	if err := config.Save(a.o.ConfigPath, c); err != nil {
+		return err
+	}
+	fmt.Printf("\n=== %s settings saved to %s\n", time.Now().Format("2006-01-02 15:04:05"), a.o.ConfigPath)
+
+	a.mu.Lock()
+	running, want := a.eng != nil, a.want
+	a.lastErr = "" // the next start is a fresh attempt: log it in full
+	a.mu.Unlock()
+	switch {
+	case running:
+		a.addEvent(ts() + " settings saved; restarting")
+		a.stop()
+		a.wake() // the controller starts it again, reading the new file
+	case want:
+		a.addEvent(ts() + " settings saved")
+		a.wake() // e.g. it was retrying: try the new settings now
+	default:
+		a.addEvent(ts() + " settings saved; they apply on Start")
+	}
+	return nil
+}

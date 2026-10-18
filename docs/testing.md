@@ -74,6 +74,38 @@ if something breaks your connection.
 4. Unplug a line during the download: it still goes DOWN within about a
    second (`adapter disconnected`), as before.
 
+## Settings window
+
+With the tray running (admin):
+
+1. **Open.** Status window → Settings (or tray menu → Settings…). The form
+   shows the current duolink.json: one weight per connected line (1 each if
+   the file has no weights), stickiness, health checks, UDP idle, and the
+   per-app rules (your `steam.exe`, `discord.exe = eth`).
+2. **Explanations** under each section are readable, nothing is cut off,
+   Tab moves between fields.
+3. **Error, nothing saved.** Set "DOWN after" to 0 → Save and apply: red
+   `Not saved: DOWN after (misses): must be 1..10, got 0`. duolink.json is
+   unchanged (check its timestamp). Put `steam.exe` in "Never balance" too:
+   red message that it's in both lists. Pin `game.exe = phone`: red
+   `Pin game.exe: no usable uplink matches "phone"`.
+4. **Save and apply.** Change stickiness to 15 minutes → Save and apply:
+   green "Saved…". The status window's events show `settings saved;
+   restarting`, then `running`; duolink.log shows the new startup with
+   `a destination stays on its line for 15m0s`. duolink.json has
+   `"minutes": 15`.
+5. **Weights.** Set Ethernet 2, Wi-Fi 1 → save: duolink.json has
+   `"weights": {"Ethernet": 2, "Wi-Fi": 1}` and the startup shows weight 2
+   and 1. Set both back to 1 → save: `"weights": {}`.
+6. **Paused.** Pause, change something, save: the event says `settings
+   saved; they apply on Start`; Start uses them.
+7. **Reset to defaults** fills the defaults (green note) without saving;
+   Cancel or X closes without saving; reopening shows the saved settings.
+8. **Broken file.** Quit, put a typo in duolink.json (e.g. `"stickey"`),
+   start the tray: it shows `Not running: config error` (retrying). Open
+   Settings: defaults are shown with a red note about the file; Save and
+   apply replaces the file and duolink starts.
+
 ## Status window
 
 With the tray running (`duolink tray`, admin terminal):

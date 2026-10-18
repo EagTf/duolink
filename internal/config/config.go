@@ -198,3 +198,25 @@ func ParseWeightSpec(spec string) (map[string]int, error) {
 	}
 	return w, nil
 }
+
+// Save writes c to path as indented JSON (the format `duolink config --init`
+// writes). It validates first, and writes to a temporary file that then
+// replaces path, so a failure never leaves a half-written duolink.json.
+func Save(path string, c Config) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
