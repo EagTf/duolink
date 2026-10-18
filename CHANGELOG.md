@@ -3,6 +3,14 @@
 Not released yet. Entries are by milestone; see
 [docs/milestones.md](docs/milestones.md) for test results.
 
+## Project layout
+
+- Split the single package into packages by job under
+  `internal/{config,netif,route,procs,balance,forward}`. The CLI stays at the
+  root (`main.go`, `cmd_*.go`). Tests moved with their code. No behaviour
+  changes.
+- Build command is now just `go build` (it names the binary duolink.exe).
+
 ## Milestone 8: per-app rules
 
 - Each new flow is mapped to the program that opened it: the app's socket

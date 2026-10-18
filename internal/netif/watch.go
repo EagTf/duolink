@@ -1,4 +1,4 @@
-package main
+package netif
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// watchAdapters calls onChange whenever Windows reports that an IPv4 interface
+// Watch calls onChange whenever Windows reports that an IPv4 interface
 // or IPv4 address changed, until ctx ends. Events come in bursts (unplugging
 // a cable changes the link, the address and the routes within milliseconds),
 // so they're coalesced: onChange runs once, shortly after a burst settles.
@@ -24,7 +24,7 @@ import (
 // pokes a channel; the real work happens in our goroutine. The rows passed to
 // the callback are deliberately ignored: onChange re-reads the full adapter
 // list, which is simpler and can't miss a change.
-func watchAdapters(ctx context.Context, onChange func()) error {
+func Watch(ctx context.Context, onChange func()) error {
 	poke := make(chan struct{}, 1)
 	cb := windows.NewCallback(func(callerContext, row, notificationType uintptr) uintptr {
 		select {
@@ -70,14 +70,14 @@ func watchAdapters(ctx context.Context, onChange func()) error {
 	return nil
 }
 
-// adapterIssue compares an uplink as it was at startup with its current state
+// Issue compares an uplink as it was at startup with its current state
 // and returns why it can't carry traffic now, or "" if it still can. cur is
 // nil if the adapter no longer exists.
 //
 // A changed address or interface index is reported, not followed: sockets are
 // bound to the startup address, so using the new one needs a restart.
 // (Picking up such changes live is the "hot-plugging" item in the plan.)
-func adapterIssue(orig, cur *Adapter) string {
+func Issue(orig, cur *Adapter) string {
 	switch {
 	case cur == nil:
 		return "adapter removed"
@@ -95,9 +95,9 @@ func adapterIssue(orig, cur *Adapter) string {
 	return ""
 }
 
-// findByLUID returns the adapter with the given LUID, or nil. The LUID stays
+// FindByLUID returns the adapter with the given LUID, or nil. The LUID stays
 // the same while an adapter exists, even across disconnects.
-func findByLUID(all []*Adapter, luid uint64) *Adapter {
+func FindByLUID(all []*Adapter, luid uint64) *Adapter {
 	for _, a := range all {
 		if a.LUID == luid {
 			return a

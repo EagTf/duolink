@@ -1,4 +1,4 @@
-package main
+package procs
 
 import (
 	"net"
@@ -11,6 +11,9 @@ import (
 
 // These tests only read the system's socket tables (no admin needed, nothing
 // changes): they open sockets on loopback and check we find our own process.
+
+// tunAddr is the TUN adapter's address (route.TunAddr), where app sockets live.
+const tunAddr = "198.18.0.1"
 
 func testExe(t *testing.T) string {
 	exe, err := os.Executable()
@@ -43,11 +46,11 @@ func TestLookupTCP(t *testing.T) {
 	src := c.LocalAddr().(*net.TCPAddr).AddrPort()
 	src = netip.AddrPortFrom(src.Addr().Unmap(), src.Port())
 
-	p := newProcTable()
-	if got, want := p.lookup(false, src), testExe(t); got != want {
-		t.Errorf("lookup(tcp %s) = %q, want %q", src, got, want)
+	p := NewTable()
+	if got, want := p.Lookup(false, src), testExe(t); got != want {
+		t.Errorf("Lookup(tcp %s) = %q, want %q", src, got, want)
 	}
-	if got := p.lookup(false, netip.MustParseAddrPort("127.0.0.1:1")); got != "" {
+	if got := p.Lookup(false, netip.MustParseAddrPort("127.0.0.1:1")); got != "" {
 		t.Errorf("lookup of an unused port = %q, want empty", got)
 	}
 }
@@ -60,9 +63,9 @@ func TestLookupUDP(t *testing.T) {
 	}
 	defer c.Close()
 	src := c.LocalAddr().(*net.UDPAddr).AddrPort()
-	p := newProcTable()
-	if got, want := p.lookup(true, netip.AddrPortFrom(src.Addr().Unmap(), src.Port())), testExe(t); got != want {
-		t.Errorf("lookup(udp %s) = %q, want %q", src, got, want)
+	p := NewTable()
+	if got, want := p.Lookup(true, netip.AddrPortFrom(src.Addr().Unmap(), src.Port())), testExe(t); got != want {
+		t.Errorf("Lookup(udp %s) = %q, want %q", src, got, want)
 	}
 
 	// ...and bound to 0.0.0.0, looked up as if seen from the TUN address.
@@ -72,7 +75,7 @@ func TestLookupUDP(t *testing.T) {
 	}
 	defer w.Close()
 	port := uint16(w.LocalAddr().(*net.UDPAddr).Port)
-	if got, want := p.lookup(true, netip.AddrPortFrom(netip.MustParseAddr(tunAddr), port)), testExe(t); got != want {
-		t.Errorf("lookup(udp wildcard :%d) = %q, want %q", port, got, want)
+	if got, want := p.Lookup(true, netip.AddrPortFrom(netip.MustParseAddr(tunAddr), port)), testExe(t); got != want {
+		t.Errorf("Lookup(udp wildcard :%d) = %q, want %q", port, got, want)
 	}
 }

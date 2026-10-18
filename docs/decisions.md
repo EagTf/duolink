@@ -63,7 +63,7 @@ alone isn't enough.
 
 **On adapter events, re-read the whole adapter list.** The notification rows
 carry partial data and come in bursts. Coalescing the burst and comparing
-each line with its startup state (`adapterIssue`) is simpler and can't miss
+each line with its startup state (`netif.Issue`) is simpler and can't miss
 a change.
 
 **A changed address or interface index is reported, not followed.** Sockets
@@ -104,6 +104,16 @@ would keep them away from their line after it recovers.
 **Config: defaults < duolink.json < flags, unknown fields rejected.** A file
 only needs what differs, typos fail loudly instead of being ignored, and
 flags allow one-off overrides without editing the file.
+
+**`main` at the root + `internal/` packages, tests beside the code.** One flat
+package was fine up to milestone 8, but the tray app (milestone 9) adds a
+second user interface over the same engine. duolink is one binary (the UI is
+part of the same build), so `main` stays at the root and `go build` alone
+makes duolink.exe; a `cmd/` folder only pays off for several binaries. Packages by job (`netif`, `route`, `procs`,
+`balance`, `forward`, `config`) keep each part small and testable, and
+`internal/` keeps them private to this module. Tests stay in the package they
+test, as Go expects: most of them check unexported internals (WRR order,
+failover transitions), which a separate tests folder couldn't reach.
 
 **IPv4 only for now.** Both target lines have no IPv6. Adding IPv6 routes
 means handling two address families everywhere; until then duolink warns when

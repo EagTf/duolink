@@ -1,17 +1,20 @@
-package main
+// Package netif finds the PC's network adapters, dials out through a chosen
+// one, and watches them for changes.
+package netif
 
 import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-// tunName is the name of the Wintun adapter duolink creates (milestone 3).
+// TunName is the name of the Wintun adapter duolink creates.
 // It is never a candidate uplink: dialing through it would loop forever.
-const tunName = "duolink"
+const TunName = "duolink"
 
 // Adapter is one network interface as seen by Windows, reduced to what duolink needs.
 type Adapter struct {
@@ -53,7 +56,7 @@ func (a *Adapter) TypeName() string {
 	return fmt.Sprintf("type %d", a.Type)
 }
 
-// listAdapters enumerates every adapter Windows knows about and marks the ones
+// List enumerates every adapter Windows knows about and marks the ones
 // duolink can't use as an uplink.
 //
 // GetAdaptersAddresses (iphlpapi.dll) is the modern replacement for GetAdaptersInfo.
@@ -67,7 +70,7 @@ func (a *Adapter) TypeName() string {
 // The function writes a linked list of IP_ADAPTER_ADDRESSES into a buffer we
 // provide. If the buffer is too small it returns ERROR_BUFFER_OVERFLOW and puts
 // the required size in size, so we grow and retry (adapters can appear between calls).
-func listAdapters() ([]*Adapter, error) {
+func List() ([]*Adapter, error) {
 	const flags = windows.GAA_FLAG_INCLUDE_GATEWAYS |
 		windows.GAA_FLAG_SKIP_ANYCAST |
 		windows.GAA_FLAG_SKIP_MULTICAST |
@@ -137,7 +140,7 @@ func skipReason(a *Adapter, oper uint32) string {
 	switch {
 	case a.Type == windows.IF_TYPE_SOFTWARE_LOOPBACK:
 		return "loopback"
-	case isTunName(a.Name):
+	case IsTunName(a.Name):
 		return "duolink's own virtual adapter"
 	case oper != windows.IfOperStatusUp:
 		return "not connected"
@@ -160,17 +163,19 @@ func sockaddrToAddr(sa *windows.SocketAddress) (netip.Addr, bool) {
 	return ip.Unmap(), ok
 }
 
-// usableAdapters returns only adapters that can be an uplink.
-func usableAdapters() ([]*Adapter, error) {
-	all, err := listAdapters()
-	if err != nil {
-		return nil, err
-	}
+// Uplinks returns the adapters from all that can carry traffic.
+func Uplinks(all []*Adapter) []*Adapter {
 	var out []*Adapter
 	for _, a := range all {
 		if a.Usable() {
 			out = append(out, a)
 		}
 	}
-	return out, nil
+	return out
+}
+
+// IsTunName reports whether name is duolink's TUN adapter, including the
+// " 2"-style suffix Windows adds when a name is taken.
+func IsTunName(name string) bool {
+	return name == TunName || strings.HasPrefix(name, TunName+" ")
 }

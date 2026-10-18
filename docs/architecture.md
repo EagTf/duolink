@@ -16,10 +16,10 @@
    │  completes the TCP handshake with the app / accepts the UDP flow,
    │  hands us one net.Conn per flow: (app src, real dst)
    ▼
- forwarder (forward.go)
+ forwarder (internal/forward)
    │  filters loops and non-unicast, asks the balancer for a line
    ▼
- balancer (balance.go)
+ balancer (internal/balance)
    │  sticky destination?  → same line as before
    │  otherwise            → smooth weighted round-robin over healthy lines
    ▼
@@ -48,7 +48,7 @@ the app sees a normal connection.
 | `192.168.x.0/24` on-link per adapter | existing | more specific than /1, so routers and the LANs stay direct |
 | `224.0.0.0/4`, `255.255.255.255/32`, loopback | existing | more specific than /1, unaffected |
 
-Startup self-check (`selfCheck` in run.go) verifies with `GetBestInterfaceEx`
+Startup self-check (`selfCheck` in cmd_run.go) verifies with `GetBestInterfaceEx`
 that 1.1.1.1 resolves to the TUN and each gateway to its own adapter, then
 dials out through each line and checks no flow from our own uplink IPs
 appeared in the netstack (routing loop).
@@ -59,7 +59,7 @@ Teardown order (deferred): remove routes → close netstack → close adapter.
 
 ## Health checks
 
-One goroutine per weighted line (`healthLoop`). Each probe TCP-connects to the
+One goroutine per weighted line (`healthLoop` in internal/balance). Each probe TCP-connects to the
 `health.targets` in turn through the bound dialer; one success means up.
 Interval `interval_seconds` while up, `down_interval_seconds` while down.
 State changes are logged. A down line gets no new flows; its existing flows
@@ -73,14 +73,14 @@ fail it as down from the start.
 Besides the interval, two things can act on a line between probes:
 
 ```
- Windows adapter events ──► watchAdapters (netwatch.go)
+ Windows adapter events ──► netif.Watch
    NotifyIpInterfaceChange        coalesce burst (300 ms)
-   NotifyUnicastIpAddressChange   └► onAdapterChange: GetAdaptersAddresses,
-                                     adapterIssue(startup state, now) per line
+   NotifyUnicastIpAddressChange   └► Balancer.OnAdapterChange: netif.List,
+                                     netif.Issue(startup state, now) per line
                                        issue appears → setDown(reason)  (no probe)
                                        issue clears  → kick probe "adapter reconnected"
 
- real-traffic dials ──► forwarder ──► noteDial(line, dst, err)
+ real-traffic dials ──► forward ──► Balancer.NoteDial(line, dst, err)
                                        ok / refused / reset → reset count
                                        cancelled            → ignored
                                        other failure        → add dst IP (distinct)
@@ -107,14 +107,14 @@ destination IP, not per port or app.
 ## Per-app rules
 
 ```
- new flow (app src 198.18.0.1:port, dst) ──► forwarder.ruleFor
-   procTable.lookup(tcp|udp, src)
+ new flow (app src 198.18.0.1:port, dst) ──► Forwarder.ruleFor
+   procs.Table.Lookup(tcp|udp, src)
      owner snapshot (GetExtendedTcpTable / GetExtendedUdpTable): addr:port → PID
        miss and snapshot older than this lookup → re-read once
        UDP also tries 0.0.0.0:port (unconnected sockets)
      PID → exe (OpenProcess + QueryFullProcessImageName), cached 10 s
-   procRules.forExe(exe) → flowRule {none | sticky-exempt | pin line | exclude → primary}
- ──► balancer.PickFor(dst, rule)
+   Rules.ForExe(exe) → balance.Rule {none | sticky-exempt | pin line | exclude → primary}
+ ──► Balancer.PickFor(dst, rule)
        pin / exclude: rule.line if it's a candidate, else WRR
        sticky-exempt: WRR, sticky table untouched
        none:          sticky table, else WRR (as before)
@@ -125,35 +125,33 @@ gets the flow, so the app's socket is always in the owner table. Snapshots
 are ordered with a counter, not timestamps (Windows' clock ticks too coarsely
 to order events microseconds apart): a lookup re-reads only if no read
 started after it began waiting, so a burst of new flows shares one read.
-`procs` is nil when no rules are configured, so then no lookups happen.
+The forwarder has no process table when no rules are configured, so then no lookups happen.
 
-`resolveRules` runs at startup: pin targets are matched like weights and must
+`balance.ResolveRules` runs at startup: pin targets are matched like weights and must
 have a non-zero weight; the primary line for `exclude` is the weighted line
 with the lowest interface metric.
 
 ## Config
 
-`config.go`: `defaultConfig()` → JSON from `duolink.json` decoded on top (unknown
-fields rejected) → flags that were actually given (`flag.Visit`) → `validate()`.
+`internal/config`: `Default()` → JSON from `duolink.json` decoded on top (unknown
+fields rejected) → flags that were actually given (`flag.Visit`, in
+`cmd_config.go`) → `Validate()`.
 Weights stay as name → number until `run` knows the adapters, then
-`resolveWeights` matches names to adapters by unique normalized prefix.
+`balance.ResolveWeights` matches names to adapters (`netif.Find`) by unique normalized prefix.
 
 ## File map
 
-| File | Contents |
+| Package | Contents |
 |---|---|
-| `main.go` | CLI dispatch, `list`, `debug route`, overlap warnings, `--ip` check |
-| `adapters.go` | `GetAdaptersAddresses` enumeration, skip reasons |
-| `dialer.go` | adapter-bound TCP/UDP dialing (`IP_UNICAST_IF`), ipify lookup |
-| `winnet.go` | admin and wintun.dll checks, netsh address/routes, `GetBestInterfaceEx`, TUN readiness, routing dump, IPv6 warning |
-| `run.go` | `run` and `cleanup`, setup/teardown order, self-check, adapter name matching |
-| `forward.go` | netstack TransportHandler: flow filtering, loop guard, TCP/UDP copy, stats |
-| `balance.go` | WRR, stickiness, health checks, failed-dial tracking, line state transitions, weight parsing |
-| `netwatch.go` | adapter change subscriptions, `adapterIssue` |
-| `proc.go` | flow → process lookup (`GetExtendedTcpTable` / `GetExtendedUdpTable`, `QueryFullProcessImageName`) |
-| `rules.go` | per-app rules: resolution against the uplinks, `flowRule` |
-| `config.go` | `duolink.json`, flag overrides, `duolink config` |
-| `*_test.go` | unit tests (no admin or network needed) |
+| root (`package main`) | the CLI: command dispatch (`main.go`), `list` and `debug route` (`cmd_list.go`), `run`, `cleanup` and the startup self-check (`cmd_run.go`), config flags and `duolink config` (`cmd_config.go`), admin / wintun.dll checks and the IPv6 warning (`checks.go`) |
+| `internal/config` | `duolink.json`: types, defaults, loading, validation, `--weights` syntax |
+| `internal/netif` | adapters (`GetAdaptersAddresses`, skip reasons), the bound dialer (`IP_UNICAST_IF`, ipify lookup), the adapter watcher and `Issue`, name matching (`Find`), overlap and IPv6 checks |
+| `internal/route` | netsh: TUN address, half-default routes; `GetBestInterfaceEx` lookups, TUN readiness, routing dump |
+| `internal/procs` | socket → process lookup (`GetExtendedTcpTable` / `GetExtendedUdpTable`, `QueryFullProcessImageName`) |
+| `internal/balance` | WRR, stickiness, health checks, failed-dial tracking, line state transitions, per-app rules, weight resolution |
+| `internal/forward` | the netstack `TransportHandler`: flow filtering, loop guard, TCP/UDP copy, live stats |
+
+Dependencies only point down: `main` → `forward` → `balance` → `netif`, `config`; `forward` also uses `procs` and `route`. Tests sit next to the code they test (`*_test.go` in the same package) and need neither admin rights nor network changes.
 
 ## Dependencies
 

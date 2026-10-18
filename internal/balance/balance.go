@@ -1,4 +1,7 @@
-package main
+// Package balance decides which uplink each new flow uses: weighted
+// round-robin, per-destination stickiness, per-app rules, health checks and
+// failover.
+package balance
 
 import (
 	"context"
@@ -6,13 +9,15 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/eagtf/duolink/internal/config"
+	"github.com/eagtf/duolink/internal/netif"
 )
 
 // dialFailuresToProbe is how many consecutive failed dials, to different
@@ -21,7 +26,7 @@ import (
 const dialFailuresToProbe = 2
 
 type uplink struct {
-	a       *Adapter
+	a       *netif.Adapter
 	weight  int
 	healthy atomic.Bool
 	current int // smooth WRR state, guarded by balancer.mu
@@ -36,14 +41,14 @@ type uplink struct {
 }
 
 type stickyEntry struct {
-	a    *Adapter
+	a    *netif.Adapter
 	last time.Time // last new flow to this destination
 }
 
-// balancer assigns each new flow to an uplink. Once assigned, a flow stays on
+// Balancer assigns each new flow to an uplink. Once assigned, a flow stays on
 // its uplink for its whole life; only new flows see weight or health changes.
-type balancer struct {
-	health HealthConfig
+type Balancer struct {
+	health config.HealthConfig
 
 	mu        sync.Mutex
 	links     []*uplink
@@ -53,21 +58,21 @@ type balancer struct {
 
 	// Replaceable in tests.
 	now   func() time.Time
-	probe func(ctx context.Context, a *Adapter) error
+	probe func(ctx context.Context, a *netif.Adapter) error
 	logf  func(format string, args ...any)
 }
 
-func newBalancer(ups []*Adapter, weights map[*Adapter]int, cfg *Config) *balancer {
-	b := &balancer{
+func New(ups []*netif.Adapter, weights map[*netif.Adapter]int, cfg *config.Config) *Balancer {
+	b := &Balancer{
 		health:    cfg.Health,
-		stickyTTL: cfg.stickyTTL(),
+		stickyTTL: cfg.StickyTTL(),
 		sticky:    map[netip.Addr]*stickyEntry{},
 		now:       time.Now,
 		logf: func(format string, args ...any) {
 			fmt.Printf(ts()+" "+format+"\n", args...)
 		},
 	}
-	b.probe = func(ctx context.Context, a *Adapter) error { return probe(ctx, a, b.health) }
+	b.probe = func(ctx context.Context, a *netif.Adapter) error { return Probe(ctx, a, b.health) }
 	for _, a := range ups {
 		l := &uplink{a: a, weight: weights[a], kick: make(chan string, 1)}
 		l.healthy.Store(true)
@@ -77,7 +82,7 @@ func newBalancer(ups []*Adapter, weights map[*Adapter]int, cfg *Config) *balance
 }
 
 // Pick chooses the uplink for a new flow to dst that no process rule covers.
-func (b *balancer) Pick(dst netip.Addr) *Adapter { return b.PickFor(dst, flowRule{}) }
+func (b *Balancer) Pick(dst netip.Addr) *netif.Adapter { return b.PickFor(dst, Rule{}) }
 
 // PickFor chooses the uplink for a new flow to dst under rule r.
 //
@@ -90,20 +95,20 @@ func (b *balancer) Pick(dst netip.Addr) *Adapter { return b.PickFor(dst, flowRul
 //     stickyTTL goes to the same uplink again (if that uplink is still
 //     usable), so the remote side sees one public IP. Everything else is
 //     balanced.
-func (b *balancer) PickFor(dst netip.Addr, r flowRule) *Adapter {
+func (b *Balancer) PickFor(dst netip.Addr, r Rule) *netif.Adapter {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	cands := b.candidates()
 	if len(cands) == 0 {
 		return nil
 	}
-	switch r.kind {
-	case rulePin, ruleExclude:
-		if contains(cands, r.line) {
-			return r.line
+	switch r.Kind {
+	case RulePin, RuleExclude:
+		if contains(cands, r.Line) {
+			return r.Line
 		}
 		return wrr(cands)
-	case ruleStickyExempt:
+	case RuleStickyExempt:
 		return wrr(cands)
 	}
 	now := b.now()
@@ -124,7 +129,7 @@ func (b *balancer) PickFor(dst netip.Addr, r flowRule) *Adapter {
 // If every uplink looks down, all weighted ones are used anyway. More likely
 // the probe targets are blocked than that every line is dead, and refusing all
 // flows would be worse. Caller holds b.mu.
-func (b *balancer) candidates() []*uplink {
+func (b *Balancer) candidates() []*uplink {
 	var cands, weighted []*uplink
 	for _, l := range b.links {
 		if l.weight > 0 {
@@ -149,7 +154,7 @@ func (b *balancer) candidates() []*uplink {
 // score grows by its weight, the highest score wins and pays back the total.
 // With weights 2:1 the sequence is A B A, A B A, ...: interleaved, never long
 // runs on one link.
-func wrr(cands []*uplink) *Adapter {
+func wrr(cands []*uplink) *netif.Adapter {
 	total := 0
 	var best *uplink
 	for _, l := range cands {
@@ -163,7 +168,7 @@ func wrr(cands []*uplink) *Adapter {
 	return best.a
 }
 
-func contains(ls []*uplink, a *Adapter) bool {
+func contains(ls []*uplink, a *netif.Adapter) bool {
 	for _, l := range ls {
 		if l.a == a {
 			return true
@@ -172,11 +177,11 @@ func contains(ls []*uplink, a *Adapter) bool {
 	return false
 }
 
-// stickyCount returns how many destinations are currently pinned to each uplink.
-func (b *balancer) stickyCount() map[*Adapter]int {
+// StickyCount returns how many destinations are currently pinned to each uplink.
+func (b *Balancer) StickyCount() map[*netif.Adapter]int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	n := map[*Adapter]int{}
+	n := map[*netif.Adapter]int{}
 	for _, e := range b.sticky {
 		n[e.a]++
 	}
@@ -185,7 +190,7 @@ func (b *balancer) stickyCount() map[*Adapter]int {
 
 // expireSticky drops destinations that haven't had a new flow within the TTL,
 // so the table doesn't grow forever.
-func (b *balancer) expireSticky() {
+func (b *Balancer) expireSticky() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := b.now()
@@ -196,7 +201,7 @@ func (b *balancer) expireSticky() {
 	}
 }
 
-func (b *balancer) link(a *Adapter) *uplink {
+func (b *Balancer) link(a *netif.Adapter) *uplink {
 	for _, l := range b.links {
 		if l.a == a {
 			return l
@@ -206,15 +211,15 @@ func (b *balancer) link(a *Adapter) *uplink {
 }
 
 // healthy reports the last health-check result for a.
-func (b *balancer) healthy(a *Adapter) bool { return b.link(a).healthy.Load() }
+func (b *Balancer) Healthy(a *netif.Adapter) bool { return b.link(a).healthy.Load() }
 
-func (b *balancer) setHealthy(a *Adapter, ok bool) { b.link(a).healthy.Store(ok) }
+func (b *Balancer) SetHealthy(a *netif.Adapter, ok bool) { b.link(a).healthy.Store(ok) }
 
-// run starts the health checks and the sticky-table sweeper; both stop with ctx.
+// Run starts the health checks and the sticky-table sweeper; both stop with ctx.
 // Flows already on a link that goes down are left alone: they either recover
 // or time out by themselves, and moving a TCP connection to another line
 // isn't possible.
-func (b *balancer) run(ctx context.Context) {
+func (b *Balancer) Run(ctx context.Context) {
 	for _, l := range b.links {
 		if l.weight > 0 {
 			go b.healthLoop(ctx, l)
@@ -239,7 +244,7 @@ func (b *balancer) run(ctx context.Context) {
 // healthLoop probes l on its interval, or at once when something kicks it
 // (failed dials, adapter reconnected). It is the only caller of check for l,
 // so probes on one line never overlap.
-func (b *balancer) healthLoop(ctx context.Context, l *uplink) {
+func (b *Balancer) healthLoop(ctx context.Context, l *uplink) {
 	for {
 		wait := time.Duration(b.health.IntervalSeconds) * time.Second
 		if !l.healthy.Load() {
@@ -258,7 +263,7 @@ func (b *balancer) healthLoop(ctx context.Context, l *uplink) {
 
 // check probes l and applies the result. why is what triggered the probe ("" =
 // the regular interval). Only a successful probe ever brings a line back UP.
-func (b *balancer) check(ctx context.Context, l *uplink, why string) {
+func (b *Balancer) check(ctx context.Context, l *uplink, why string) {
 	err := b.probe(ctx, l.a)
 	if ctx.Err() != nil {
 		return
@@ -280,7 +285,7 @@ func (b *balancer) check(ctx context.Context, l *uplink, why string) {
 }
 
 // setDown marks l DOWN and logs why, if it was UP.
-func (b *balancer) setDown(l *uplink, reason string) {
+func (b *Balancer) setDown(l *uplink, reason string) {
 	if l.healthy.Swap(false) {
 		b.logf("%s is DOWN (%s): no new flows until it recovers", l.a.Name, reason)
 	}
@@ -288,7 +293,7 @@ func (b *balancer) setDown(l *uplink, reason string) {
 
 // kickProbe asks l's health loop to probe now. If a request is already
 // pending, that one covers this too.
-func (b *balancer) kickProbe(l *uplink, why string) {
+func (b *Balancer) kickProbe(l *uplink, why string) {
 	select {
 	case l.kick <- why:
 	default:
@@ -318,13 +323,13 @@ func dialOutcome(err error) int {
 	return dialLineFailed
 }
 
-// noteDial records the result of a real-traffic dial through a. After
+// NoteDial records the result of a real-traffic dial through a. After
 // dialFailuresToProbe consecutive failures to different destination IPs it
 // kicks an immediate probe. The probe, not the dials, decides whether the
 // line goes DOWN: dials can fail because the destinations are down.
 // Several failures to the same IP count once, so retries to one dead server
 // never trigger a probe.
-func (b *balancer) noteDial(a *Adapter, dst netip.AddrPort, err error) {
+func (b *Balancer) NoteDial(a *netif.Adapter, dst netip.AddrPort, err error) {
 	l := b.link(a)
 	if l == nil {
 		return
@@ -361,7 +366,7 @@ func (b *balancer) noteDial(a *Adapter, dst netip.AddrPort, err error) {
 // A new problem marks the line DOWN at once, with no probe: a disconnected
 // adapter can't carry anything. When the problem clears, a probe is kicked,
 // and that probe decides whether the line comes back UP.
-func (b *balancer) setAdapterIssue(l *uplink, issue string) {
+func (b *Balancer) setAdapterIssue(l *uplink, issue string) {
 	l.mu.Lock()
 	prev := l.issue
 	l.issue = issue
@@ -380,26 +385,26 @@ func (b *balancer) setAdapterIssue(l *uplink, issue string) {
 	}
 }
 
-// onAdapterChange re-reads the adapters and updates every weighted line.
-// Called by watchAdapters after Windows reports a change.
-func (b *balancer) onAdapterChange() {
-	all, err := listAdapters()
+// OnAdapterChange re-reads the adapters and updates every weighted line.
+// Called by netif.Watch after Windows reports a change.
+func (b *Balancer) OnAdapterChange() {
+	all, err := netif.List()
 	if err != nil {
 		b.logf("could not re-read adapters after a change: %v", err)
 		return
 	}
 	for _, l := range b.links {
 		if l.weight > 0 {
-			b.setAdapterIssue(l, adapterIssue(l.a, findByLUID(all, l.a.LUID)))
+			b.setAdapterIssue(l, netif.Issue(l.a, netif.FindByLUID(all, l.a.LUID)))
 		}
 	}
 }
 
-// probe TCP-connects to each target through a until one answers (no data is
+// Probe TCP-connects to each target through a until one answers (no data is
 // sent). The dial uses the same adapter binding as real traffic, so it tests
 // the actual path. Several targets, ideally different operators, so one
 // outage doesn't mark a healthy line down.
-func probe(ctx context.Context, a *Adapter, h HealthConfig) error {
+func Probe(ctx context.Context, a *netif.Adapter, h config.HealthConfig) error {
 	var errs []string
 	for _, t := range h.Targets {
 		pctx, cancel := context.WithTimeout(ctx, time.Duration(h.TimeoutSeconds)*time.Second)
@@ -424,29 +429,11 @@ func shortErr(err error) string {
 
 func ts() string { return time.Now().Format("15:04:05") }
 
-// parseWeightSpec turns the --weights text "eth=2,wifi=1" into a name → weight
-// map, the same shape as "weights" in duolink.json.
-func parseWeightSpec(spec string) (map[string]int, error) {
-	w := map[string]int{}
-	for _, part := range strings.Split(spec, ",") {
-		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
-		if !ok || k == "" {
-			return nil, fmt.Errorf("bad weight %q: want name=number, e.g. eth=1", part)
-		}
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return nil, fmt.Errorf("bad weight %q: %q is not a number", part, v)
-		}
-		w[k] = n
-	}
-	return w, nil
-}
-
-// resolveWeights matches weight names to uplinks with findAdapter ("eth" →
+// ResolveWeights matches weight names to uplinks with findAdapter ("eth" →
 // Ethernet). With no weights at all every uplink gets 1. Otherwise uplinks
 // that aren't named get 0, i.e. they're not used.
-func resolveWeights(spec map[string]int, ups []*Adapter) (map[*Adapter]int, error) {
-	w := map[*Adapter]int{}
+func ResolveWeights(spec map[string]int, ups []*netif.Adapter) (map[*netif.Adapter]int, error) {
+	w := map[*netif.Adapter]int{}
 	if len(spec) == 0 {
 		for _, a := range ups {
 			w[a] = 1
@@ -458,7 +445,7 @@ func resolveWeights(spec map[string]int, ups []*Adapter) (map[*Adapter]int, erro
 		if n < 0 || n > 100 {
 			return nil, fmt.Errorf("weight for %q must be 0..100, got %d", k, n)
 		}
-		a, err := findAdapter(ups, k)
+		a, err := netif.Find(ups, k)
 		if err != nil {
 			return nil, err
 		}

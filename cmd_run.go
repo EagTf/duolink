@@ -8,11 +8,15 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/eagtf/duolink/internal/balance"
+	"github.com/eagtf/duolink/internal/config"
+	"github.com/eagtf/duolink/internal/forward"
+	"github.com/eagtf/duolink/internal/netif"
+	"github.com/eagtf/duolink/internal/route"
 	"github.com/xjasonlyu/tun2socks/v2/core"
 	t2stun "github.com/xjasonlyu/tun2socks/v2/core/device/tun"
 	wgtun "golang.zx2c4.com/wireguard/tun"
@@ -40,25 +44,20 @@ func cmdRun(args []string) error {
 	if err := checkWintunDLL(); err != nil {
 		return err
 	}
-	all, err := listAdapters()
+	all, err := netif.List()
 	if err != nil {
 		return err
 	}
-	var ups []*Adapter
-	for _, a := range all {
-		if a.Usable() {
-			ups = append(ups, a)
-		}
-	}
+	ups := netif.Uplinks(all)
 	if len(ups) < 2 {
 		return fmt.Errorf("need at least 2 usable uplinks, found %d (run `duolink list` to see why)", len(ups))
 	}
-	for _, w := range overlapWarnings(ups) {
+	for _, w := range netif.OverlapWarnings(ups) {
 		fmt.Println("warning:", w)
 	}
 	printIPv6Warning(all)
 
-	weights, err := resolveWeights(cfg.Weights, ups)
+	weights, err := balance.ResolveWeights(cfg.Weights, ups)
 	if err != nil {
 		return err
 	}
@@ -76,17 +75,17 @@ func cmdRun(args []string) error {
 	if active < 2 {
 		fmt.Println("note: only one uplink has a non-zero weight, so nothing is being combined")
 	}
-	bal := newBalancer(ups, weights, &cfg)
-	if ttl := cfg.stickyTTL(); ttl > 0 {
+	bal := balance.New(ups, weights, &cfg)
+	if ttl := cfg.StickyTTL(); ttl > 0 {
 		fmt.Printf("stickiness: on, a destination stays on its line for %v after its last new flow\n", ttl)
 	} else {
 		fmt.Println("stickiness: off, every flow is balanced on its own")
 	}
-	rules, err := resolveRules(cfg.Processes, ups, weights)
+	rules, err := balance.ResolveRules(cfg.Processes, ups, weights)
 	if err != nil {
 		return err
 	}
-	fmt.Println("process rules:", rules.describe())
+	fmt.Println("process rules:", rules.Describe())
 
 	// A previous run that crashed may have left routes behind.
 	removeLeftovers(all)
@@ -106,7 +105,7 @@ func cmdRun(args []string) error {
 	// WintunCreateAdapter in wintun.dll; tun2socks wraps the result as a gVisor
 	// link endpoint. The adapter exists as long as this process holds it.
 	wgtun.WintunTunnelType = "duolink" // shown in Device Manager instead of "WireGuard"
-	dev, err := t2stun.Open(tunName, 0)
+	dev, err := t2stun.Open(netif.TunName, 0)
 	if err != nil {
 		return fmt.Errorf("create TUN adapter: %w", err)
 	}
@@ -119,32 +118,32 @@ func cmdRun(args []string) error {
 
 	// The netstack: every TCP/UDP flow Windows routes into the TUN is
 	// terminated here and handed to the forwarder.
-	fwd := newForwarder(ups, bal, rules, time.Duration(cfg.UDPIdleSeconds)*time.Second)
+	fwd := forward.New(ups, bal, rules, cfg.UDPIdle())
 	st, err := core.CreateStack(&core.Config{LinkEndpoint: dev, TransportHandler: fwd})
 	if err != nil {
 		return fmt.Errorf("start netstack: %w", err)
 	}
 	defer st.Close()
 
-	if err := configureTUN(tun.Index); err != nil {
+	if err := route.ConfigureTUN(tun.Index); err != nil {
 		return err
 	}
 	// Don't route anything into the adapter until it's up and its address is
 	// usable as a source; otherwise lookups via it fail as "unreachable".
-	if tun, err = waitTUNReady(tun.Name, 10*time.Second); err != nil {
+	if tun, err = route.WaitTUNReady(tun.Name, 10*time.Second); err != nil {
 		return err
 	}
 	fmt.Printf("adapter is up, %s is ready\n", tun.IPv4)
-	// Registered before adding, so a half-finished addRoutes is undone too.
+	// Registered before adding, so a half-finished AddRoutes is undone too.
 	// Deferred last = runs first: routes go before the netstack and adapter.
 	defer restoreRoutes(tun.Index)
-	if err := addRoutes(tun.Index); err != nil {
+	if err := route.AddRoutes(tun.Index); err != nil {
 		return err
 	}
-	if err := selfCheck(ctx, tun, ups, fwd, bal); err != nil {
+	if err := selfCheck(ctx, tun, ups, fwd, bal, cfg.Health); err != nil {
 		if *keepOnFail {
 			fmt.Fprintln(os.Stderr, "self-check failed:", err)
-			dumpRouting(netip.MustParseAddr("1.1.1.1"), tun.Index)
+			route.Dump(netip.MustParseAddr("1.1.1.1"), tun.Index)
 		}
 		return err
 	}
@@ -152,24 +151,24 @@ func cmdRun(args []string) error {
 		return nil
 	}
 
-	bal.run(ctx)
+	bal.Run(ctx)
 	// Instant failover on adapter changes. If the subscription fails, the
 	// health probes still catch a dead line, just later, so carry on.
-	if err := watchAdapters(ctx, bal.onAdapterChange); err != nil {
+	if err := netif.Watch(ctx, bal.OnAdapterChange); err != nil {
 		fmt.Println("warning: can't watch adapter changes, failover relies on health probes only:", err)
 	}
 	fmt.Println("\nrunning. Press Ctrl+C to stop.")
-	fwd.printStats(ctx, ups, weights, bal, 2*time.Second)
+	fwd.PrintStats(ctx, ups, weights, bal, 2*time.Second)
 	fmt.Println("\nstopping...")
 	return nil
 }
 
 func restoreRoutes(tunIndex uint32) {
 	fmt.Println("removing routes:")
-	if err := removeRoutes(tunIndex); err != nil {
+	if err := route.RemoveRoutes(tunIndex); err != nil {
 		fmt.Fprintln(os.Stderr, "warning:", err, "\n  run `duolink cleanup`, or reboot (routes are not persistent)")
 	}
-	if idx, err := bestInterface(netip.MustParseAddr("1.1.1.1")); err == nil {
+	if idx, err := route.BestInterface(netip.MustParseAddr("1.1.1.1")); err == nil {
 		fmt.Printf("internet traffic now goes via interface %d again\n", idx)
 	}
 }
@@ -184,10 +183,10 @@ func restoreRoutes(tunIndex uint32) {
 //
 // Step 3 doubles as the first health check: an uplink that fails it starts out
 // marked down, so it gets no flows and is re-probed every few seconds.
-func selfCheck(ctx context.Context, tun *Adapter, ups []*Adapter, fwd *forwarder, bal *balancer) error {
+func selfCheck(ctx context.Context, tun *netif.Adapter, ups []*netif.Adapter, fwd *forward.Forwarder, bal *balance.Balancer, health config.HealthConfig) error {
 	fmt.Println("\nself-check:")
 	target := netip.MustParseAddr("1.1.1.1")
-	idx, err := bestInterfaceRetry(target, tun.Index, 5*time.Second)
+	idx, err := route.BestInterfaceRetry(target, tun.Index, 5*time.Second)
 	if err != nil {
 		return fmt.Errorf("GetBestInterfaceEx(%s) still failing after 5s: %w", target, err)
 	}
@@ -197,7 +196,7 @@ func selfCheck(ctx context.Context, tun *Adapter, ups []*Adapter, fwd *forwarder
 	fmt.Printf("  ok   internet (%s) is routed into the TUN\n", target)
 
 	for _, a := range ups {
-		idx, err := bestInterface(a.Gateway)
+		idx, err := route.BestInterface(a.Gateway)
 		if err == nil && idx == a.Index {
 			fmt.Printf("  ok   %s (router %s) stays direct on %s\n", a.IPv4.Masked(), a.Gateway, a.Name)
 		} else {
@@ -206,26 +205,26 @@ func selfCheck(ctx context.Context, tun *Adapter, ups []*Adapter, fwd *forwarder
 		}
 	}
 
-	before := fwd.loops.Load()
+	before := fwd.Loops()
 	dialErrs := make([]error, len(ups))
 	var wg sync.WaitGroup
 	for i, a := range ups {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			dialErrs[i] = probe(ctx, a, bal.health)
+			dialErrs[i] = balance.Probe(ctx, a, health)
 		}()
 	}
 	wg.Wait()
 	// A looped connection is accepted by the netstack first and only then
 	// reaches the forwarder, so give it a moment to be counted.
 	time.Sleep(300 * time.Millisecond)
-	if fwd.loops.Load() != before {
+	if fwd.Loops() != before {
 		return errors.New("ROUTING LOOP: sockets bound to an uplink went into the TUN. IP_UNICAST_IF binding is not working; aborting")
 	}
 	for i, a := range ups {
 		if err := dialErrs[i]; err != nil {
-			bal.setHealthy(a, false)
+			bal.SetHealthy(a, false)
 			fmt.Printf("  WARN %s: health probe failed (%v): starting it as DOWN\n", a.Name, err)
 		} else {
 			fmt.Printf("  ok   %s: bound socket reached the internet directly, not through the TUN (no loop)\n", a.Name)
@@ -236,9 +235,9 @@ func selfCheck(ctx context.Context, tun *Adapter, ups []*Adapter, fwd *forwarder
 
 // waitForAdapter finds the freshly created TUN in the adapter list. Windows
 // can take a moment to bind IPv4 to a new adapter (its IPv4 IfIndex is 0 until then).
-func waitForAdapter(name string) (*Adapter, error) {
+func waitForAdapter(name string) (*netif.Adapter, error) {
 	for i := 0; i < 20; i++ {
-		all, err := listAdapters()
+		all, err := netif.List()
 		if err != nil {
 			return nil, err
 		}
@@ -252,23 +251,17 @@ func waitForAdapter(name string) (*Adapter, error) {
 	return nil, fmt.Errorf("adapter %q did not appear with IPv4 enabled", name)
 }
 
-// isTunName reports whether name is our TUN adapter, including the " 2"-style
-// suffix Windows adds when a name is taken.
-func isTunName(name string) bool {
-	return name == tunName || strings.HasPrefix(name, tunName+" ")
-}
-
 // removeLeftovers deletes duolink's routes from any duolink adapter that is still
 // around. Returns how many such adapters it found.
-func removeLeftovers(all []*Adapter) int {
+func removeLeftovers(all []*netif.Adapter) int {
 	n := 0
 	for _, a := range all {
-		if !isTunName(a.Name) || a.Index == 0 {
+		if !netif.IsTunName(a.Name) || a.Index == 0 {
 			continue
 		}
 		n++
 		fmt.Printf("found leftover adapter %q (index %d), removing its routes:\n", a.Name, a.Index)
-		if err := removeRoutes(a.Index); err != nil {
+		if err := route.RemoveRoutes(a.Index); err != nil {
 			fmt.Println("  (not all routes were present, which is fine)")
 		}
 	}
@@ -279,14 +272,14 @@ func cmdCleanup() error {
 	if !isAdmin() {
 		return errors.New("duolink cleanup must be run as administrator")
 	}
-	all, err := listAdapters()
+	all, err := netif.List()
 	if err != nil {
 		return err
 	}
 	if removeLeftovers(all) == 0 {
 		fmt.Println("no duolink adapter found. Its routes only exist while the adapter does, so there is nothing to remove.")
 	}
-	if idx, err := bestInterface(netip.MustParseAddr("1.1.1.1")); err == nil {
+	if idx, err := route.BestInterface(netip.MustParseAddr("1.1.1.1")); err == nil {
 		for _, a := range all {
 			if a.Index == idx {
 				fmt.Printf("internet traffic goes via %s (interface %d)\n", a.Name, idx)
@@ -294,41 +287,4 @@ func cmdCleanup() error {
 		}
 	}
 	return nil
-}
-
-// findAdapter matches a user-given key against uplink names. Case, spaces and
-// punctuation are ignored, and a unique prefix is enough: "eth" → "Ethernet",
-// "wifi" → "Wi-Fi". An exact match wins over prefixes ("ethernet" vs "Ethernet 2").
-func findAdapter(ups []*Adapter, key string) (*Adapter, error) {
-	k := norm(key)
-	var hits []*Adapter
-	for _, a := range ups {
-		if norm(a.Name) == k {
-			return a, nil
-		}
-		if strings.HasPrefix(norm(a.Name), k) {
-			hits = append(hits, a)
-		}
-	}
-	switch len(hits) {
-	case 1:
-		return hits[0], nil
-	case 0:
-		return nil, fmt.Errorf("no usable uplink matches %q (see `duolink list`)", key)
-	}
-	var names []string
-	for _, a := range hits {
-		names = append(names, a.Name)
-	}
-	return nil, fmt.Errorf("%q is ambiguous: matches %s", key, strings.Join(names, ", "))
-}
-
-func norm(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
 }

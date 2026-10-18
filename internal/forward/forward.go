@@ -1,4 +1,6 @@
-package main
+// Package forward handles the flows the netstack terminates: it picks an
+// uplink for each one, dials out through it and copies bytes both ways.
+package forward
 
 import (
 	"context"
@@ -15,6 +17,11 @@ import (
 
 	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+
+	"github.com/eagtf/duolink/internal/balance"
+	"github.com/eagtf/duolink/internal/netif"
+	"github.com/eagtf/duolink/internal/procs"
+	"github.com/eagtf/duolink/internal/route"
 )
 
 // linkStats are live counters for one uplink, updated by the copy loops.
@@ -24,14 +31,14 @@ type linkStats struct {
 	flows    atomic.Int64 // flows ever assigned
 }
 
-// forwarder implements tun2socks' adapter.TransportHandler: the netstack calls
+// Forwarder implements tun2socks' adapter.TransportHandler: the netstack calls
 // HandleTCP / HandleUDP once per new flow coming out of the TUN, with a
 // net.Conn for the app's side. We dial the real destination through a chosen
 // uplink and copy bytes both ways.
-type forwarder struct {
-	bal     *balancer // picks the uplink for each new flow and hears how dials went
+type Forwarder struct {
+	bal     *balance.Balancer // picks the uplink for each new flow and hears how dials went
 	udpIdle time.Duration
-	stats   map[*Adapter]*linkStats
+	stats   map[*netif.Adapter]*linkStats
 	own     map[netip.Addr]bool // our uplinks' IPs; seeing one as a flow source = loop
 
 	loops    atomic.Int64
@@ -39,21 +46,21 @@ type forwarder struct {
 
 	// Process rules (milestone 8). procs is nil when no rules are configured,
 	// so no lookups happen at all.
-	rules     *procRules
-	procs     *procTable
+	rules     *balance.Rules
+	procs     *procs.Table
 	ruleMu    sync.Mutex
 	ruleFlows map[string]int64 // exe → flows a rule applied to
 	unknown   atomic.Int64     // flows whose owning process wasn't found
 }
 
-func newForwarder(ups []*Adapter, bal *balancer, rules *procRules, udpIdle time.Duration) *forwarder {
-	f := &forwarder{bal: bal, rules: rules, ruleFlows: map[string]int64{}, udpIdle: udpIdle, stats: map[*Adapter]*linkStats{}, own: map[netip.Addr]bool{}}
+func New(ups []*netif.Adapter, bal *balance.Balancer, rules *balance.Rules, udpIdle time.Duration) *Forwarder {
+	f := &Forwarder{bal: bal, rules: rules, ruleFlows: map[string]int64{}, udpIdle: udpIdle, stats: map[*netif.Adapter]*linkStats{}, own: map[netip.Addr]bool{}}
 	for _, a := range ups {
 		f.stats[a] = &linkStats{}
 		f.own[a.IPv4.Addr()] = true
 	}
-	if rules != nil && !rules.empty() {
-		f.procs = newProcTable()
+	if rules != nil && !rules.Empty() {
+		f.procs = procs.NewTable()
 	}
 	return f
 }
@@ -74,7 +81,7 @@ func endpoints(id stack.TransportEndpointID) (src, dst netip.AddrPort) {
 //   - anything that isn't plain IPv4 unicast: Windows also sends LLMNR, mDNS,
 //     SSDP and NetBIOS broadcasts out of every adapter, including ours. Those
 //     mean nothing on the internet.
-func (f *forwarder) accept(src, dst netip.AddrPort) bool {
+func (f *Forwarder) accept(src, dst netip.AddrPort) bool {
 	if f.own[src.Addr()] {
 		f.loops.Add(1)
 		f.loopOnce.Do(func() {
@@ -85,24 +92,22 @@ func (f *forwarder) accept(src, dst netip.AddrPort) bool {
 	}
 	a := dst.Addr()
 	return a.Is4() && !a.IsMulticast() && !a.IsLinkLocalUnicast() && !a.IsUnspecified() &&
-		a != netip.AddrFrom4([4]byte{255, 255, 255, 255}) && !tunPrefix.Contains(a)
+		a != netip.AddrFrom4([4]byte{255, 255, 255, 255}) && !route.TunPrefix.Contains(a)
 }
-
-var tunPrefix = netip.MustParsePrefix(tunAddr + "/30")
 
 // ruleFor finds the process that opened this flow and returns its rule.
 // src is the app's side of the flow (its socket's local address).
-func (f *forwarder) ruleFor(udp bool, src netip.AddrPort) flowRule {
+func (f *Forwarder) ruleFor(udp bool, src netip.AddrPort) balance.Rule {
 	if f.procs == nil {
-		return flowRule{}
+		return balance.Rule{}
 	}
-	exe := f.procs.lookup(udp, src)
+	exe := f.procs.Lookup(udp, src)
 	if exe == "" {
 		f.unknown.Add(1)
-		return flowRule{}
+		return balance.Rule{}
 	}
-	r := f.rules.forExe(exe)
-	if r.kind != ruleNone {
+	r := f.rules.ForExe(exe)
+	if r.Kind != balance.RuleNone {
 		f.ruleMu.Lock()
 		f.ruleFlows[exe]++
 		f.ruleMu.Unlock()
@@ -111,15 +116,15 @@ func (f *forwarder) ruleFor(udp bool, src netip.AddrPort) flowRule {
 }
 
 // ruleSummary is the stats line for process rules, or "" if nothing to show.
-func (f *forwarder) ruleSummary() string {
+func (f *Forwarder) ruleSummary() string {
 	if f.procs == nil {
 		return ""
 	}
 	var parts []string
 	f.ruleMu.Lock()
-	for _, exe := range f.rules.exes() {
+	for _, exe := range f.rules.Exes() {
 		if n := f.ruleFlows[exe]; n > 0 {
-			parts = append(parts, fmt.Sprintf("%s %s %d", exe, f.rules.forExe(exe).kind, n))
+			parts = append(parts, fmt.Sprintf("%s %s %d", exe, f.rules.ForExe(exe).Kind, n))
 		}
 	}
 	f.ruleMu.Unlock()
@@ -135,12 +140,12 @@ func (f *forwarder) ruleSummary() string {
 // HandleTCP and HandleUDP must return quickly: gVisor calls the UDP handler
 // inline on its packet path, and tun2socks only frees the TCP handshake slot
 // once HandleTCP returns. So each flow gets its own goroutine.
-func (f *forwarder) HandleTCP(c adapter.TCPConn) { go f.guard(c, func() { f.tcp(c) }) }
-func (f *forwarder) HandleUDP(c adapter.UDPConn) { go f.guard(c, func() { f.udp(c) }) }
+func (f *Forwarder) HandleTCP(c adapter.TCPConn) { go f.guard(c, func() { f.tcp(c) }) }
+func (f *Forwarder) HandleUDP(c adapter.UDPConn) { go f.guard(c, func() { f.udp(c) }) }
 
 // guard keeps a bug in one flow from killing the process: a panic in a
 // goroutine would skip the deferred route cleanup in run.
-func (f *forwarder) guard(c net.Conn, fn func()) {
+func (f *Forwarder) guard(c net.Conn, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintln(os.Stderr, "flow panic:", r)
@@ -150,7 +155,7 @@ func (f *forwarder) guard(c net.Conn, fn func()) {
 	fn()
 }
 
-func (f *forwarder) tcp(c adapter.TCPConn) {
+func (f *Forwarder) tcp(c adapter.TCPConn) {
 	defer c.Close()
 	src, dst := endpoints(c.ID())
 	if !f.accept(src, dst) {
@@ -166,7 +171,7 @@ func (f *forwarder) tcp(c adapter.TCPConn) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	out, err := up.DialTCP4(ctx, dst.String())
 	cancel()
-	f.bal.noteDial(up, dst, err)
+	f.bal.NoteDial(up, dst, err)
 	if err != nil {
 		return
 	}
@@ -187,7 +192,7 @@ func (f *forwarder) tcp(c adapter.TCPConn) {
 	<-done
 }
 
-func (f *forwarder) udp(c adapter.UDPConn) {
+func (f *Forwarder) udp(c adapter.UDPConn) {
 	defer c.Close()
 	src, dst := endpoints(c.ID())
 	if !f.accept(src, dst) {
@@ -207,7 +212,7 @@ func (f *forwarder) udp(c adapter.UDPConn) {
 	// about the line; only errors (e.g. no route) are reported.
 	out, err := up.DialUDP4(context.Background(), dst.String())
 	if err != nil {
-		f.bal.noteDial(up, dst, err)
+		f.bal.NoteDial(up, dst, err)
 		return
 	}
 	defer out.Close()
@@ -265,11 +270,11 @@ func closeWrite(c net.Conn) {
 	}
 }
 
-// printStats prints per-uplink throughput every interval until ctx ends.
+// PrintStats prints per-uplink throughput every interval until ctx ends.
 // Columns: health, weight, throughput over the last interval, active TCP/UDP
 // flows, flows assigned since start, and destinations stuck to this line.
-func (f *forwarder) printStats(ctx context.Context, ups []*Adapter, weights map[*Adapter]int, bal *balancer, every time.Duration) {
-	prev := map[*Adapter][2]int64{}
+func (f *Forwarder) PrintStats(ctx context.Context, ups []*netif.Adapter, weights map[*netif.Adapter]int, bal *balance.Balancer, every time.Duration) {
+	prev := map[*netif.Adapter][2]int64{}
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -279,7 +284,7 @@ func (f *forwarder) printStats(ctx context.Context, ups []*Adapter, weights map[
 		case <-t.C:
 		}
 		var totRx, totTx float64
-		sticky := bal.stickyCount()
+		sticky := bal.StickyCount()
 		for i, a := range ups {
 			st := f.stats[a]
 			rx, tx := st.rx.Load(), st.tx.Load()
@@ -292,7 +297,7 @@ func (f *forwarder) printStats(ctx context.Context, ups []*Adapter, weights map[
 			switch {
 			case weights[a] == 0:
 				state = "off"
-			case !bal.healthy(a):
+			case !bal.Healthy(a):
 				state = "DOWN"
 			}
 			when := "        "
@@ -313,3 +318,9 @@ func (f *forwarder) printStats(ctx context.Context, ups []*Adapter, weights map[
 func mbit(bytes int64, d time.Duration) float64 {
 	return float64(bytes) * 8 / d.Seconds() / 1e6
 }
+
+// Loops returns how many flows were dropped as routing loops. The startup
+// self-check compares it before and after dialing through every uplink.
+func (f *Forwarder) Loops() int64 { return f.loops.Load() }
+
+func ts() string { return time.Now().Format("15:04:05") }
