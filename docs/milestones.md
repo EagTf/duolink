@@ -223,7 +223,7 @@ Tested (steps in docs/testing.md, "Settings window"), all passed:
 ## Awaiting test
 
 ### 12. Recovery after failover, hot-plug, friendlier per-app rules
-Status: awaiting test.
+Status: done.
 Delivered:
 - After an outage: sticky entries created while a line was DOWN are
   forgotten when a line comes back UP, so those destinations are balanced
@@ -252,7 +252,16 @@ Delivered:
   weights for new lines; pins following a replaced line; health loops
   starting for new lines; rule list conversion, options, upsert, exe names,
   the Open-dialog struct size. Layout checked by rendering off-screen.
-Tested: (pending)
+- Review fix: unplugging a line's adapter counts as an outage until a new
+  line takes its place, so download apps are also rebalanced after the
+  adapter is plugged back in; a probe that finishes after its line was
+  replaced is ignored.
+Tested: all steps pass. Steam spreads over both lines again after a Wi-Fi
+outage (outage connections reconnected), and after unplugging and
+replugging the USB Wi-Fi adapter; a new adapter becomes a line, a new
+address is followed, pins stay on their line, no routing loop
+(`duolink list --ip`), and the Settings rules list adds, edits and removes
+rules.
 
 ## Planned
 
@@ -263,5 +272,5 @@ Tested: (pending)
 | 9 | System tray app: `duolink tray`, no console, Start/Pause, speeds, Quit with cleanup, single instance, autostart via Task Scheduler with highest privileges | done (logon start pending) |
 | 10 | Small window opened from the tray; X hides it to the tray, only Quit exits | done |
 | 11 | Settings in the window, so it's the full app: edit everything in duolink.json (weights, stickiness, health checks, per-app rules) with explanations, validation before saving, and Apply (restarts duolink with the new settings) | done |
-| 12 | Recovery after failover (rebalance destinations that moved during an outage), hot-plug (lines follow adapters that come, go or change address), friendlier per-app rules (list, file picker, line dropdown) | awaiting test |
+| 12 | Recovery after failover (rebalance destinations that moved during an outage), hot-plug (lines follow adapters that come, go or change address), friendlier per-app rules (list, file picker, line dropdown) | done |
 | later | Metered/phone lines with a data cap; automatic weights from passive throughput measurement; IPv6 | ideas |
