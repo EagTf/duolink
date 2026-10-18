@@ -273,4 +273,116 @@ rules.
 | 10 | Small window opened from the tray; X hides it to the tray, only Quit exits | done |
 | 11 | Settings in the window, so it's the full app: edit everything in duolink.json (weights, stickiness, health checks, per-app rules) with explanations, validation before saving, and Apply (restarts duolink with the new settings) | done |
 | 12 | Recovery after failover (rebalance destinations that moved during an outage), hot-plug (lines follow adapters that come, go or change address), friendlier per-app rules (list, file picker, line dropdown) | done |
-| later | Metered/phone lines with a data cap; automatic weights from passive throughput measurement; IPv6 | ideas |
+| 13 | Smarter balancing: retry a failed dial on another line, least-busy picking, MTU 9000 on the TUN | planned |
+| 14 | Automatic weights from measured speed, per-adapter total traffic | planned |
+| 15 | Auto-pause with fewer than two working lines; control the running tray from the CLI | planned |
+| 16 | IPv6 | planned |
+| 17 | SOCKS5 proxy mode, no admin needed | planned |
+| 18 | Releases and installer | planned |
+| 19 | Cross-platform groundwork (split Windows code behind interfaces) | planned |
+| 20 | Linux, then macOS | planned (needs a test machine) |
+| later | Metered/phone lines with a data cap; ICMP (ping) forwarding; speed graph in the window | ideas |
+
+## Plan for milestones 13–20
+
+Milestones 13–20 add faster balancing, automatic weights, IPv6, more ways
+to run and install duolink, and other systems. What duolink already does
+well stays as it is, and every new feature has to work with it:
+
+- per-destination stickiness, so sites and games see one public IP;
+- per-app rules (balance every connection, pin to a line, never balance);
+- recovery after an outage, including reconnecting download apps;
+- health checks that need two misses before DOWN, plus instant failover on
+  adapter events;
+- hot-plug by LUID through adapter change events;
+- the settings and status windows, the event history, and the self-check
+  before routes go live; routes with `store=active` only.
+
+### 13. Smarter balancing
+- **Retry on another line.** When a TCP dial fails with a line-level error
+  (network down or unreachable, no address, timeout), dial the same
+  destination through the next line at once instead of resetting the app's
+  connection. The failed line is skipped for new flows for a short cooldown
+  and gets a probe (the probe still decides DOWN). Refused and reset
+  connections are answers from the destination: no retry. Same for UDP
+  socket setup.
+- **Least-busy picking.** Replace smooth round-robin with weighted
+  least-active-flows: a new flow goes to the line with the lowest
+  (open flows + 1) / weight, ties broken from a random start. A flow stops
+  counting as open at its first half-close. Stickiness and per-app rules
+  are applied first, as now; least-busy only replaces the round-robin step.
+- **MTU 9000 on the TUN** (Windows side and netstack). TUN traffic never
+  leaves the PC, and bigger packets mean far fewer trips through the
+  netstack. Measure CPU per Mbit/s before and after.
+- Pooled copy buffers, and TCP keepalive on the netstack side of each flow,
+  so a flow whose peer vanished doesn't linger (also covers the
+  half-close-without-timeout item in action_items).
+
+### 14. Automatic weights
+- Each line's weight follows its measured speed: the peak throughput it
+  carried recently, relative to the best line (minimum 0.05, so a slow line
+  still gets the odd flow and is re-measured). Weights stay equal until
+  every line has been measured. The peak only drops while a line is busy
+  but slower; an idle line's estimate drifts back up (capped at half the
+  best line's), so one bad moment can't starve it.
+- Configured weights stay and win: `"weights": "auto"` (the new default) or
+  fixed numbers as now; weight 0 still means unused. Settings window gets
+  the choice.
+- Each line's total traffic from Windows' own counters (all apps, not only
+  duolink's flows) in the window, next to duolink's own numbers.
+
+### 15. Auto-pause and CLI control
+- With fewer than two working lines there's nothing to balance: pause by
+  itself, resume a few seconds after a second line works. Pausing waits for
+  quiet (about 10 s, longer while a download runs), and automatic switches
+  are at least 30 s apart so a flapping line can't toggle it. A Pause or
+  Start by the user always wins. On by default, a checkbox in Settings and
+  the tray menu.
+- `duolink on`, `duolink off`, `duolink quit`, `duolink status` control
+  the running tray from a terminal, over a local named pipe that only the
+  same user can open.
+- README troubleshooting: Windows' "minimize the number of simultaneous
+  connections" policy, phone tethering as a second line.
+
+### 16. IPv6
+- Dual-stack TUN: a private (ULA) IPv6 address on it, so Windows still
+  prefers IPv4 for dual-stack sites and they spread over every line, and
+  `::/1` + `8000::/1` routes (`store=active`).
+- IPv6 dialer (`IPV6_UNICAST_IF`, host byte order) and IPv6 probe targets;
+  health per line and per address family.
+- Mode auto / on / off. In auto, IPv6 is balanced only when every line has
+  working IPv6; otherwise new IPv6 connections are refused before the
+  handshake completes (TCP reset, UDP port unreachable), so apps fall back
+  to IPv4 at once.
+- Stickiness, rules, the loop guard, cleanup and `duolink list` cover IPv6.
+
+### 17. SOCKS5 proxy mode
+- `duolink socks`: a SOCKS5 proxy on 127.0.0.1 that balances only the apps
+  pointed at it. No admin, no TUN, no routes. Same balancer, health checks
+  and retry; per-app rules don't apply (no owner lookup).
+
+### 18. Releases and installer
+- A GitHub Actions release workflow on `vX.Y.Z` tags; CHANGELOG section as
+  release notes.
+- A script that downloads `wintun.dll` and checks its SHA-256 and
+  signature, used by the release build and documented for source builds.
+- Release assets: portable zip (duolink.exe + wintun.dll), an installer
+  (Start menu entry, optional autostart, clean uninstall), and a one-line
+  PowerShell install command in the README.
+- `duolink version`.
+
+### 19. Cross-platform groundwork
+- Put the Windows-only parts behind small interfaces with
+  `_windows.go` files: adapter list and change events (`netif`), routes and
+  TUN setup (`route`), socket owner lookup (`procs`), the dialer's interface
+  binding, autostart, single instance. The windows (Win32) stay
+  Windows-only; other systems get the tray menu only.
+- No behaviour change on Windows; CI also builds for Linux and macOS.
+
+### 20. Linux, then macOS
+- **Linux:** kernel TUN, routes with `ip route`, `SO_BINDTODEVICE`, owners
+  from `/proc/net/tcp` + `/proc/<pid>/fd`, systemd user unit or desktop
+  autostart, capabilities instead of running as root.
+- **macOS:** utun, `IP_BOUND_IF` plus a scoped default route per line,
+  owners from libproc, launchd for autostart.
+- Each needs a test machine; built and tested one system at a time.

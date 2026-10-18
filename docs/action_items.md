@@ -75,4 +75,3 @@
   executables to the lower-latency line.
 - UDP heuristic for games: UDP not to port 443 (QUIC) → pin to the game line.
 - ICMP echo forwarding via `IcmpSendEcho2Ex` bound to a line's source address.
-- Automatic weights from passive peak throughput per line.
