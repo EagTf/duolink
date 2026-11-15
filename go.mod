@@ -5,7 +5,7 @@ go 1.27.2
 require (
 	fyne.io/systray v1.12.2
 	github.com/xjasonlyu/tun2socks/v2 v2.7.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 	golang.zx2c4.com/wireguard v0.0.0-20261006164505-2631ce99a06f
 	gvisor.dev/gvisor v0.0.0-20260701204157-69c2d17aea96
 )
